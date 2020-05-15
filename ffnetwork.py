@@ -536,6 +536,30 @@ class FFNetwork(object):
                 # Modify output size to take into account shifts
                 #if nn < self.num_layers:
                 #    layer_sizes[nn+1] = self.layers[nn].output_dims.copy()
+
+            elif self.layer_types[nn] == 'grid_shift':
+                self.layers.append(GridShifterLayer(
+                    scope='grid_shift_layer_%i' % nn,
+                    input_dims=layer_sizes[nn],
+                    n_neurons=layer_sizes[nn+1],
+                    activation_func=network_params['activation_funcs'][nn],
+                    normalize_weights=network_params['normalize_weights'][nn],
+                    weights_initializer=network_params['weights_initializers'][nn],
+                    biases_initializer=network_params['biases_initializers'][nn],
+                    reg_initializer=network_params['reg_initializers'][nn],
+                    num_inh=network_params['num_inh'][nn],
+                    pos_constraint=network_params['pos_constraints'][nn],
+                    log_activations=network_params['log_activations']))
+
+            elif self.layer_types[nn] == 'grid_sample':
+                self.layers.append(GridSampleLayer(
+                    scope='grid_sample_layer_%i' % nn,
+                    input_dims=layer_sizes[nn],
+                    n_neurons=layer_sizes[nn+1]
+                    ))
+
+
+
             else:
                 raise TypeError('Layer type %i not defined.' % nn)
     # END FFNetwork._define_network

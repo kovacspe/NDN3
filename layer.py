@@ -2732,3 +2732,204 @@ class HadiReadoutLayer(Layer):
             tf.summary.histogram('act_pre', pre)
             tf.summary.histogram('act_post', post)
     # END ConvReadoutLayer.build_graph
+
+
+class GridSampleLayer(Layer):
+    """Implementation of a readout layer compatible with convolutional layers
+
+    Attributes:
+
+    """
+
+    def __init__(
+            self,
+            scope=None, # this can be a list up to 3-dimensions
+            input_dims=None,
+            n_neurons=1,
+            activation_func='relu',
+            normalize_weights=0,
+            weights_initializer='normal',
+            biases_initializer='zeros',
+            reg_initializer=None,
+            num_inh=0,
+            pos_constraint=None,
+            log_activations=False):
+        """Constructor for ConvLayer class
+
+        Args:
+            scope (str): name scope for variables and operations in layer
+            input_dims (int or list of ints): dimensions of input data in format [CHW], number of batches are not included
+            num_filters (int): number of convolutional filters in layer
+
+        Raises:
+            ValueError: If `pos_constraint` is `True`
+
+        """
+        self.n_neurons = n_neurons
+        super(GridSampleLayer, self).__init__(
+            scope=scope,
+            input_dims=input_dims,
+            filter_dims=[n_neurons],
+            output_dims=input_dims[0],
+            activation_func=activation_func,
+            normalize_weights=normalize_weights,
+            weights_initializer=weights_initializer,
+            biases_initializer=biases_initializer,
+            reg_initializer=reg_initializer,
+            num_inh=num_inh,
+            pos_constraint=pos_constraint,  # note difference from layer (not anymore)
+            log_activations=log_activations)
+        #Correct output dims
+        self.output_dims = n_neurons
+
+
+        
+
+    # END GridSampleLayer.__init__
+
+    def _split_input(self, input): 
+        field_len = np.prod(self.input_dims)
+        field,grid_points = tf.split(input,[field_len,self.n_neurons*2],axis=1)
+
+        field = tf.reshape(field, (-1, self.input_dims[2], self.input_dims[1], self.input_dims[0]))
+        grid_points = tf.reshape(grid_points,(-1,self.n_neurons,2))
+        
+        return field,grid_points
+ 
+
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
+        with tf.name_scope(self.scope):
+            self._define_layer_variables()
+
+            if self.pos_constraint is not None:
+                w_p = tf.maximum(self.weights_var, 0.0)
+            else:
+                w_p = self.weights_var
+
+            if self.normalize_weights > 0:
+                w_pn = tf.nn.l2_normalize(w_p, axis=0)
+            if self.normalize_weights < 0:
+                w_pn = tf.divide(w_p, tf.maximum(tf.norm(w_p, axis=0), 1))
+            else:
+                w_pn = w_p
+
+
+            field,grid_points = self._split_input(inputs)
+            h,w= self.input_dims[2],self.input_dims[1]
+
+
+            # Find interpolation sides
+            i, j = grid_points[..., 0], grid_points[..., 1]
+            i = tf.cast(h - 1, grid_points.dtype) * (i + 1) / 2
+            j = tf.cast(w - 1, grid_points.dtype) * (j + 1) / 2
+            i_1 = tf.maximum(tf.cast(tf.floor(i), tf.int32), 0)
+            i_2 = tf.minimum(i_1 + 1, h - 1)
+            j_1 = tf.maximum(tf.cast(tf.floor(j), tf.int32), 0)
+            j_2 = tf.minimum(j_1 + 1, w - 1)
+                
+            #Batch indicies
+            tiling = tf.concat([[1],tf.shape(i)[1:]],axis=0)
+            ind = tf.tile(tf.range(tf.shape(field)[0])[:,tf.newaxis],tiling)
+            ind_11 = tf.stack([ind,i_1,j_1],axis=-1)
+            ind_12 = tf.stack([ind,i_1,j_2],axis=-1)
+            ind_21 = tf.stack([ind,i_2,j_1],axis=-1)
+            ind_22 = tf.stack([ind,i_2,j_2],axis=-1)
+
+            # Gather pixels
+            q_11 = tf.gather_nd(field,ind_11)
+            q_12 = tf.gather_nd(field,ind_12)
+            q_21 = tf.gather_nd(field,ind_21)
+            q_22 = tf.gather_nd(field,ind_22)
+
+            # Interpolation coefficients
+            di = tf.cast(i, field.dtype) - tf.cast(i_1, field.dtype)
+            di = tf.expand_dims(di, -1)
+            dj = tf.cast(j, field.dtype) - tf.cast(j_1, field.dtype)
+            dj = tf.expand_dims(dj, -1)
+
+            # Final interpolation
+            q_i1 = q_11 * (1 - di) + q_21 * di
+            q_i2 = q_12 * (1 - di) + q_22 * di
+            outputs_shaped = q_i1 * (1 - dj) + q_i2 * dj
+
+            #
+            weighted_features = tf.multiply(w_pn,outputs_shaped,name='weighting')
+            weighted_sum = tf.reduce_sum(weighted_features,axis=1,name='sum_along_channels')
+            biased_activation = tf.add(weighted_sum,self.biases_var,name='add_biases')
+            neuron_activations = self._apply_act_func(biased_activation)
+
+
+            # Shape output to shape [Batch, Neurons*Channels]
+            self.outputs = tf.reshape(neuron_activations,(-1,self.n_neurons*self.input_dims[0]))
+
+  
+    # END GridSampleLayer.build_graph
+
+
+class GridShifterLayer(Layer):
+    """Implementation of a layer, which remembers grid points in bias variables. As input it recieves 2 values (shift), and will shift the grid points with this vector. Output and grid point coordinates are clipped between -1 and 1
+
+    """
+
+    def __init__(
+            self,
+            scope=None, # this can be a list up to 3-dimensions
+            input_dims=None,
+            biases_initializer='zeros',
+            reg_initializer=None,
+            n_neurons=1 ):
+        """Constructor for GridShifterLayer class
+
+        Args:
+            scope (str): name scope for variables and operations in layer
+            input_dims (int or list of ints): dimensions of input data
+            n_neurons (int): number of neuron coordinates to remember. It will return (x,y) coordinates for each neuron
+        """
+
+        super(GridShifterLayer, self).__init__(
+            scope=scope,
+            input_dims=input_dims,
+            output_dims = n_neurons*2)
+
+        self.n_neurons = n_neurons
+
+    # END GridSampleLayer.__init__
+
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
+        with tf.name_scope(self.scope):
+            self._define_layer_variables() 
+            
+            tiled_shift = tf.tile(inputs,(1,self.n_neurons),name='Copy_shift')        
+            shifted = tf.add(tiled_shift, self.biases_var, name='Shift_grid_points')
+            clipped = tf.clip_by_value(shifted,-1,1)
+            
+            # Reshape to NDN interface shape
+            self.outputs = tf.reshape(clipped,[-1,2*self.n_neurons])
+
+    def _define_layer_variables(self):
+        # Define tensor-flow versions of variables (placeholder and variables)
+        with tf.name_scope('weights_init'):
+            self.weights_ph = tf.placeholder_with_default(
+                self.weights,
+                shape=self.weights.shape,
+                name='weights_ph')
+            self.weights_var = tf.Variable(
+                self.weights_ph,
+                dtype=tf.float32,
+                name='weights_var')
+        # Initialize biases placeholder/variable
+        with tf.name_scope('biases_init'):
+            self.biases_ph = tf.placeholder_with_default(
+                self.biases,
+                shape=self.biases.shape,
+                name='biases_ph')
+            self.biases_var = tf.Variable(
+                self.biases_ph,
+                dtype=tf.float32,
+                constraint=lambda x: tf.clip_by_value(x, -1., 1.),
+                name='biases_var')
+    # END ShiftGraidLayer._define_layer_variables
+
+            
+
+    # END GridSampleLayer.build_graph
