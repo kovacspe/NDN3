@@ -100,7 +100,7 @@ class Layer(object):
             ValueError: If `biases_initializer` is not a valid string
 
         """
-
+        
         _allowed_act_funcs = ['lin', 'relu', 'leaky_relu', 'softplus', 'exp',
                               'sigmoid', 'tanh', 'quad', 'elu', 'requ']
 
@@ -136,7 +136,7 @@ class Layer(object):
             input_dims[0] *= input_dims[3]
         else:
             self.num_lags = 1
-        self.input_dims = input_dims[:3].copy()
+        self.input_dims = deepcopy(input_dims[:3])
 
         if isinstance(output_dims, list):
             while len(output_dims) < 3:
@@ -176,7 +176,7 @@ class Layer(object):
             self.log = True
         else:
             self.log = False
-
+        
         # Set up layer regularization
         self.reg = Regularization(
             input_dims=filter_dims,
@@ -367,6 +367,16 @@ class Layer(object):
         self.weights = w_pn
         self.biases = sess.run(self.biases_var)
     # END Layer.write_layer_params
+
+    def copy_layer_params(self, origin_layer):
+        """Copy layer parameters over to new layer (which is self in this case). 
+        Only should be called by NDN.copy_network_params()."""
+
+        self.weights = deepcopy(origin_layer.weights)
+        self.biases = deepcopy(origin_layer.biases)
+        self.weights = deepcopy(origin_layer.weights)
+        self.reg = origin_layer.reg.reg_copy()
+        self.normalize_weights = deepcopy(origin_layer.normalize_weights)
 
     def define_regularization_loss(self):
         """Wrapper function for building regularization portion of graph"""
@@ -1340,7 +1350,7 @@ class ConvSepLayer(Layer):
             while len(input_dims) < 3:
                 input_dims.append(1)
         else:
-            input_dims = [1, input_dims, 1]  # assume 1-dimensional (space)
+            input_dims = [input_dims, 1, 1]  # assume 1-dimensional (filter-dim)
 
         if filter_dims is None:
             filter_dims = input_dims
@@ -2383,13 +2393,12 @@ class BiConvLayer(ConvLayer):
 
 
 class ReadoutLayer(Layer):
-    """Implementation of readout layer, with main difference being regularization on neuron-by-neuron basis
-    """
+    """Implementation of readout layer, with main difference from Layer being regularization
+    on neuron-by-neuron basis"""
 
     def __init__(
             self,
             scope=None,
-            #nlags=None,
             input_dims=None,    # this can be a list up to 3-dimensions
             output_dims=None,
             activation_func='relu',
@@ -2426,19 +2435,12 @@ class ReadoutLayer(Layer):
                 activations
 
         """
-
-        # Process stim and filter dimensions (potentially both passed in as num_inputs list)
-        if isinstance(input_dims, list):
-            while len(input_dims) < 3:
-                input_dims.append(1)
-        else:
-            input_dims = [1, input_dims, 1]  # assume 1-dimensional (space)
-
+        # Implement layer almost verbatim 
         super(ReadoutLayer, self).__init__(
                 scope=scope,
                 #nlags=nlags,
                 input_dims=input_dims,
-                filter_dims=input_dims,
+                filter_dims=None,
                 output_dims=output_dims,
                 activation_func=activation_func,
                 normalize_weights=normalize_weights,
@@ -2451,9 +2453,10 @@ class ReadoutLayer(Layer):
 
         # Redefine specialized Regularization object to overwrite default
         self.reg = UnitRegularization(
-            input_dims=input_dims,
+            input_dims=self.input_dims,
             num_outputs=self.reg.num_outputs,
             vals=reg_initializer)
+
     # END ReadoutLayer.__init_
 
 

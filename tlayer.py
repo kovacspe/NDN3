@@ -7,11 +7,12 @@ import numpy as np
 import tensorflow as tf
 from .regularization import Regularization
 from .regularization import SepRegularization
+from .NDNutils import tent_basis_generate
 
 from .layer import Layer
+from copy import deepcopy
 
 
-# TODO: fix input/output dims so that multiple consecutive TLayers are possible
 class TLayer(Layer):
     """Implementation of a temporal layer, which uses temporal (and causal) convolutions to handle num_lags, without having it
     present in input.
@@ -106,9 +107,6 @@ class TLayer(Layer):
         self.dilation = dilation
         self.output_dims = output_dims
 
-        # ei_mask not useful at the moment
-        self.ei_mask_var = None
-
         self.reg = Regularization(
             input_dims=[num_lags, 1, 1],
             num_outputs=num_filters,
@@ -119,18 +117,18 @@ class TLayer(Layer):
         else:
             self.include_biases = True
 
+        # Add filter-basis dummy (that can be filled in later)
+        self.filter_basis = None
     # END TLayer.__init__
 
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
 
-        #assert batch_size is not None, "must pass in batch_size to TLayer"
-        #num_inputs = self.input_dims[1]*self.input_dims[2]
         num_inputs = np.prod(self.input_dims)
         with tf.name_scope(self.scope):
             self._define_layer_variables()
-
+            
             # make shaped input
-            shaped_input = tf.reshape(tf.transpose(inputs), [num_inputs, -1, 1, 1])  # avoid using 'batch_size'
+            shaped_input = tf.reshape(tf.transpose(inputs), [num_inputs, -1, 1, 1]) 
             if self.pos_constraint is not None:
                 w_p = tf.maximum(self.weights_var, 0.0)
             else:
@@ -141,10 +139,16 @@ class TLayer(Layer):
             else:
                 w_pn = w_p
 
-            #padding = tf.constant([[0, self.filter_width], [0, 0]])
+            if self.filter_basis is not None:
+                # make constant-tensor if using temporal basis functions 
+                filter_basis = tf.constant( self.filter_basis, name='filter_basis')
+                ks = tf.matmul( filter_basis, w_pn )
+            else:
+                ks = w_pn
+
             padding = tf.constant([[0, self.num_lags], [0, 0]])
-            padded_filt = tf.pad(tf.reverse(w_pn, [0]), padding)  # note the time-reversal
-            #shaped_padded_filt = tf.reshape(padded_filt, [2*self.filter_width, 1, 1, self.num_filters])
+            padded_filt = tf.pad(tf.reverse(ks, [0]), padding)  # note the time-reversal
+
             shaped_padded_filt = tf.reshape(padded_filt, [2*self.num_lags, 1, 1, self.num_filters])
 
             # Temporal convolution
@@ -156,44 +160,128 @@ class TLayer(Layer):
                 _post = self._apply_act_func(tf.add(_pre, self.biases_var))
             else:
                 _post = self._apply_act_func(_pre)
-            self.outputs = tf.reshape(tf.transpose(_post, [1, 0, 2, 3]), (-1, np.prod(self.output_dims)))
+
+            if self.ei_mask_var is None:
+                _post2 = _post
+            else:
+                _post2 = tf.multiply(_post, self.ei_mask_var)
+
+            self.outputs = tf.reshape(tf.transpose(_post2, [1, 0, 2, 3]), (-1, np.prod(self.output_dims)))
 
         if self.log:
             tf.summary.histogram('act_pre', _pre)
             tf.summary.histogram('act_post', _post)
-            # END TLayer.build_graph
+    # END TLayer.build_graph
+
+    def init_temporal_basis( 
+        self, 
+        filter_basis=None,
+        xs=None, 
+        num_params=None, doubling_time=None, init_spacing=1,
+        first_lag=0, end_at_zero=False
+        ):
+        """Initializes temporal layer with tent-bases, calling the NDNutils function tent_basis_generate.
+        It will make tent_basis over the range of 'xs', with center points at each value of 'xs'
+        Alternatively (if xs=None), will generate a list with init_space and doubling_time up to
+        the total number of parameters. Must specify xs OR num_param.
+        
+        Note that this basis must extend up to the number of lags initialized. Will adjust number of
+        weights to the number of parameters specified here."""
+ 
+        if filter_basis is not None:
+            self.filter_basis = filter_basis
+        else:
+            self.filter_basis = tent_basis_generate(xs=xs, num_params=num_params, first_lag=first_lag,
+                                        doubling_time=doubling_time, init_spacing=init_spacing)
+        [NTbasis, num_params] = self.filter_basis.shape
+        # Find anchor in last basis element
+        last_anchor = np.argmax(self.filter_basis[:,-1])
+        
+        if last_anchor >= self.num_lags:
+            print('Warning: basis elements will be truncated or limited by num_lags set for temporal basis.')
+
+        # Truncate or grow to fit number of lags specified
+        if NTbasis > self.num_lags:
+            print("  Temporal layer: must truncate temporal basis from %d to %d."%(NTbasis, self.num_lags))
+            self.filter_basis = self.filter_basis[range(self.num_lags), :]
+            if end_at_zero:
+                # go smoothly to zero
+                dx = self.num_lags-last_anchor-1
+                self.filter_basis[range(last_anchor, self.num_lags), -1] = 1-np.array(list(range(dx+1)))/dx
+        elif NTbasis < self.num_lags:
+            print("  Temporal layer: must expand temporal basis from %d to %d."%(NTbasis, self.num_lags))
+            self.filter_basis = np.concatenate(
+                (self.filter_basis, np.zeros([self.num_lags-NTbasis, num_params], dtype='float32')), 
+                axis=0)
+            if end_at_zero:
+                # go smoothly to zero
+                dx = self.num_lags-last_anchor-1
+                self.filter_basis[range(last_anchor, self.num_lags), -1] = 1-np.array(list(range(dx+1)))/dx
+            else:
+                # extend last basis element over the whole range
+                self.filter_basis[NTbasis:,-1] = 1  
+
+        # Adjust number of weights in layer to reflect parameterization with basis
+        if self.filter_dims[0] < num_params:
+            print("Weird. Less parameters in the layer than should be. Error likely.")
+        else:
+            print("  Temporal layer: updating number of weights in temporal layer from %d to %d."
+                    %(self.filter_dims[0], num_params))
+        self.filter_dims[0] = num_params
+        self.weights = self.weights[range(num_params), :]
+        self.reg.input_dims[0] = num_params
+    # END TLayer.init_temporal_basis
+
+    def copy_layer_params(self, origin_layer):
+        """Copy layer parameters over to new layer (which is self in this case) -- overloaded for TLayer
+        to also copy temporal_basis if relevant."""
+
+        super(TLayer, self).copy_layer_params(origin_layer)
+        #self.weights = deepcopy(origin_layer.weights)
+        #self.biases = deepcopy(origin_layer.biases)
+        #self.weights = deepcopy(origin_layer.weights)
+        #self.reg = origin_layer.reg.reg_copy()
+        #self.normalize_weights = deepcopy(origin_layer.normalize_weights)
+        # new addition
+        self.filter_basis = deepcopy(origin_layer.filter_basis)
+    # END TLayer.copy_layer_params
 
 
-class CaTentLayer(Layer):
-    """Implementation of calcium tent layer -- NOT YET UPDATED FOR CURRENT MODEL
+class TLayerSpecific(TLayer):
+    """Implementation of a temporal layer where each temporal kernel processes a different input: input dims
+    must match the number of outputs, and collapses with resulting temporal function across time lag
 
     Attributes:
-        filter_width (int): time spread
-        batch_size (int): the batch size is explicitly needed for this computation
-
+        Alterations from Layer: now num_lags is explicitly kept as input_dims[0] so temporal regularization can
+            by applied. All other dims are kept as-is.
+        Note the build_graph explicitly uses batch_size (which is passed in then)
     """
 
     def __init__(
             self,
             scope=None,
-            input_dims=None,  # this can be a list up to 3-dimensions
-            output_dims=None,
+            input_dims=None,
+            num_lags=1,
             num_filters=None,
-            filter_width=None,  # this can be a list up to 3-dimensions
-            batch_size=None,
             activation_func='lin',
-            normalize_weights=True,
-            weights_initializer='normal',
+            dilation=1,
+            normalize_weights=0,
+            weights_initializer='trunc_normal',
             biases_initializer='zeros',
             reg_initializer=None,
             num_inh=0,
-            pos_constraint=True,
+            pos_constraint=None,
             log_activations=False):
+
         """Constructor for convLayer class
 
         Args:
             scope (str): name scope for variables and operations in layer
-            input_dims (int or list of ints): dimensions of input data
+            input_dims (int or list of ints): size (and dimensionality) of the inputs to the layer. Should be in the
+                form of: [# filts, # space dim1, # space dim2]. Note that num_lags is not a property of the input
+                and is handled separately (see below).
+                Default is none, which means will be determined at the build time.
+            num_lags (int): number of lags to be generated within the TLayer (and operated on by filters).
             num_filters (int): number of convolutional filters in layer
             filter_dims (int or list of ints): dimensions of input data
             shift_spacing (int): stride of convolution operation
@@ -215,37 +303,18 @@ class CaTentLayer(Layer):
                 activations
 
         Raises:
-            ValueError: If `pos_constraint` is `True`
 
         """
+        # number of filters must match number of input dims
+        if num_filters is None:
+            num_filters = np.prod(input_dims[:3])
+        assert np.prod(input_dims[:3]) == num_filters, 'For specific temporal layer, num_filters must match input dims.'
 
-        self.batch_size = batch_size
-        self.filter_width = filter_width
-
-        # Process stim and filter dimensions
-        # (potentially both passed in as num_inputs list)
-        if isinstance(input_dims, list):
-            while len(input_dims) < 3:
-                input_dims.append(1)
-        else:
-            # assume 1-dimensional (space)
-            input_dims = [1, input_dims, 1]
-
-        # If output dimensions already established, just strip out num_filters
-        #  if isinstance(num_filters, list):
-        #      num_filters = num_filters[0]
-
-        # TODO: how to specify num filters...
-        if num_filters > 1:
-            num_filters = input_dims[1]
-
-        super(CaTentLayer, self).__init__(
+        super(TLayerSpecific, self).__init__(
             scope=scope,
-            #nlags=nlags,
             input_dims=input_dims,
-            output_dims=output_dims,  # Note difference from layer
-            #my_num_inputs=filter_width,
-            #my_num_outputs=num_filters,
+            num_lags = num_lags,
+            num_filters=num_filters,
             activation_func=activation_func,
             normalize_weights=normalize_weights,
             weights_initializer=weights_initializer,
@@ -255,31 +324,23 @@ class CaTentLayer(Layer):
             pos_constraint=pos_constraint,
             log_activations=log_activations)
 
-        self.output_dims = input_dims
+        self.output_dims = [num_filters, 1, 1]  # collapse over input_dims = num_filters
+    # END TLayerSpecific.__init__
 
-        # ei_mask not useful at the moment
-        self.ei_mask_var = None
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
 
-        # make nc biases instead of only 1
-        bias_dims = (1, self.output_dims[1])
-        init_biases = np.zeros(shape=bias_dims, dtype='float32')
-        self.biases = init_biases
-
-        self.reg = Regularization(
-            input_dims=[filter_width, 1, 1],
-            num_outputs=num_filters,
-            vals=reg_initializer)
-
-    # END CaTentLayer.__init__
-
-    def build_graph(self, inputs, params_dict=None, use_dropout=False):
+        num_inputs = np.prod(self.input_dims)
 
         with tf.name_scope(self.scope):
+
             self._define_layer_variables()
 
             # make shaped input
-            shaped_input = tf.reshape(tf.transpose(inputs), [-1, self.batch_size, 1, 1])
-
+            #shaped_input = tf.reshape(tf.transpose(inputs), [num_inputs, -1, 1, 1])  # from TLayer
+            #shaped_input = tf.reshape(tf.transpose(inputs), [1, -1, 1, num_inputs])  # weird alternative
+            shaped_input = tf.expand_dims( tf.expand_dims(inputs, axis=0), axis=2)
+            
+            #shaped_input = tf.reshape(inputs, [1, -1, 1, num_inputs]) 
             if self.pos_constraint is not None:
                 w_p = tf.maximum(self.weights_var, 0.0)
             else:
@@ -290,167 +351,48 @@ class CaTentLayer(Layer):
             else:
                 w_pn = w_p
 
-            padding = tf.constant([[0, self.filter_width], [0, 0]])
-            padded_filt = tf.pad(w_pn, padding)
-            shaped_padded_filt = tf.reshape(padded_filt, [2*self.filter_width, 1, 1, self.num_filters])
-
-            # convolve
-            strides = [1, 1, 1, 1]
-            _pre = tf.nn.conv2d(shaped_input, shaped_padded_filt, strides, padding='SAME')
-
-            # transpose, squeeze to final shape
-            # both cases will produce _pre_final_shape.shape ---> (batch_size, nc)
-            if self.num_filters > 1:
-                _pre_final_shape = tf.linalg.diag_part(tf.transpose(tf.squeeze(_pre, axis=2), [1, 0, 2]))
+            if self.filter_basis is not None:
+                # make constant-tensor if using temporal basis functions 
+                filter_basis = tf.constant( self.filter_basis, name='filter_basis')
+                ks = tf.matmul( filter_basis, w_pn )
             else:
-                # single filter
-                _pre_final_shape = tf.transpose(tf.squeeze(_pre, axis=[2, 3]))
+                ks = w_pn
 
-            pre = tf.add(_pre_final_shape, self.biases_var)
-            self.outputs = self._apply_act_func(pre)
+            # ks is currently num_lags x NC
+            padding = tf.constant([[0, self.num_lags], [0, 0]])
+            padded_filt = tf.pad(tf.reverse(ks, [0]), padding)  # note the time-reversal
+
+            tile_dims = tf.constant([1, 1, num_inputs], tf.int32)
+            tile_filt = tf.expand_dims(tf.eye(num_inputs), axis=0)
+            # Generates 4-d weight tensor: [num_lags, 1, num_inputs, num_inputs]) 
+            #   this treats num_lags x 1 as spatial filter (to be convolved)
+            shaped_padded_filt = tf.expand_dims(
+                                    tf.multiply(
+                                        #tf.repeat(padded_filt, num_inputs, axis=2), # only in tf-2.1
+                                        tf.tile(tf.expand_dims(padded_filt, axis=2), tile_dims),
+                                        tile_filt),
+                                    axis=1)
+
+            # Temporal convolution
+            strides = [1, 1, 1, 1]
+            dilations = [1, self.dilation, 1, 1]
+            _pre = tf.nn.conv2d(shaped_input, shaped_padded_filt, strides, dilations=dilations, padding='SAME')
+
+            if self.include_biases:
+                _post = self._apply_act_func(tf.add(_pre, self.biases_var))
+            else:
+                _post = self._apply_act_func(_pre)
+
+            if self.ei_mask_var is None:
+                _post2 = _post
+            else:
+                _post2 = tf.multiply(_post, self.ei_mask_var)
+
+            #self.outputs = tf.reshape(tf.transpose(_post, [1, 0, 2, 3]), (-1, np.prod(self.output_dims)))
+            self.outputs = tf.squeeze(_post2, [0, 2])
 
         if self.log:
-            tf.summary.histogram('act_pre', pre)
-            tf.summary.histogram('act_post', post)
-    # END CaTentLayer.build_graph
+            tf.summary.histogram('act_pre', _pre)
+            tf.summary.histogram('act_post', _post)
+    # END TLayerSpecific.build_graph
 
-
-class NoRollCaTentLayer(Layer):
-    """Implementation of calcium tent layer
-
-    Attributes:
-        filter_width (int): time spread
-        batch_size (int): the batch size is explicitly needed for this computation
-
-    """
-
-    def __init__(
-            self,
-            scope=None,
-            nlags=None,
-            input_dims=None,  # this can be a list up to 3-dimensions
-            output_dims=None,
-            num_filters=None,
-            filter_width=None,  # this can be a list up to 3-dimensions
-            batch_size=None,
-            activation_func='lin',
-            normalize_weights=0,
-            weights_initializer='trunc_normal',
-            biases_initializer='zeros',
-            reg_initializer=None,
-            num_inh=0,
-            pos_constraint=True,
-            log_activations=False):
-        """Constructor for convLayer class
-
-        Args:
-            scope (str): name scope for variables and operations in layer
-            input_dims (int or list of ints): dimensions of input data
-            num_filters (int): number of convolutional filters in layer
-            filter_dims (int or list of ints): dimensions of input data
-            shift_spacing (int): stride of convolution operation
-            activation_func (str, optional): pointwise function applied to
-                output of affine transformation
-                ['relu'] | 'sigmoid' | 'tanh' | 'identity' | 'softplus' |
-                'elu' | 'quad'
-            normalize_weights (int): 1 to normalize weights 0 otherwise
-                [0] | 1
-            weights_initializer (str, optional): initializer for the weights
-                ['trunc_normal'] | 'normal' | 'zeros'
-            biases_initializer (str, optional): initializer for the biases
-                'trunc_normal' | 'normal' | ['zeros']
-            reg_initializer (dict, optional): see Regularizer docs for info
-            num_inh (int, optional): number of inhibitory units in layer
-            pos_constraint (bool, optional): True to constrain layer weights to
-                be positive
-            log_activations (bool, optional): True to use tf.summary on layer
-                activations
-
-        Raises:
-            ValueError: If `pos_constraint` is `True`
-
-        """
-
-        if filter_width is None:
-            filter_width = 2*batch_size
-
-        self.batch_size = batch_size
-        self.filter_width = filter_width
-
-        # Process stim and filter dimensions
-        # (potentially both passed in as num_inputs list)
-        if isinstance(input_dims, list):
-            while len(input_dims) < 3:
-                input_dims.append(1)
-        else:
-            # assume 1-dimensional (space)
-            input_dims = [1, input_dims, 1]
-
-        # If output dimensions already established, just strip out num_filters
-      #  if isinstance(num_filters, list):
-      #      num_filters = num_filters[0]
-
-        # TODO: how to specify num filters...
-        if num_filters > 1:
-            num_filters = input_dims[1]
-
-        super(NoRollCaTentLayer, self).__init__(
-            scope=scope,
-            nlags=nlags,
-            input_dims=input_dims,
-            output_dims=output_dims,  # Note difference from layer
-            my_num_inputs=filter_width,
-            my_num_outputs=num_filters,
-            activation_func=activation_func,
-            normalize_weights=normalize_weights,
-            weights_initializer=weights_initializer,
-            biases_initializer=biases_initializer,
-            reg_initializer=reg_initializer,
-            num_inh=num_inh,
-            pos_constraint=pos_constraint,
-            log_activations=log_activations)
-
-        self.output_dims = input_dims
-
-    # END CaTentLayer.__init__
-
-    def build_graph(self, inputs, params_dict=None):
-
-        with tf.name_scope(self.scope):
-            self._define_layer_variables()
-
-            # make shaped input
-            shaped_input = tf.reshape(tf.transpose(inputs), [self.input_dims[1], self.batch_size, 1, 1])
-
-            # make shaped filt
-            conv_filt_shape = [self.filter_width, 1, 1, self.num_filters]
-
-            if self.normalize_weights > 0:
-                wnorms = tf.maximum(tf.sqrt(tf.reduce_sum(tf.square(self.weights_var), axis=0)), 1e-8)
-                shaped_filt = tf.reshape(tf.divide(self.weights_var, wnorms), conv_filt_shape)
-            else:
-                shaped_filt = tf.reshape(self.weights_var, conv_filt_shape)
-
-            # convolve
-            strides = [1, 1, 1, 1]
-            if self.pos_constraint:
-                pre = tf.nn.conv2d(shaped_input, tf.maximum(0.0, shaped_filt), strides, padding='SAME')
-            else:
-                pre = tf.nn.conv2d(shaped_input, shaped_filt, strides, padding='SAME')
-
-            # from pre to post
-            if self.ei_mask_var is not None:
-                post = tf.multiply(
-                    self.activation_func(tf.add(pre, self.biases_var)),
-                    self.ei_mask_var)
-            else:
-                post = self.activation_func(tf.add(pre, self.biases_var))
-
-            # this produces shape (batch_size, nc, num_filts)
-            # after matrix_diag_part we have diagonal part ---> shape will be (batch_size, nc)
-            self.outputs = tf.matrix_diag_part(tf.transpose(tf.squeeze(post, axis=2), [1, 0, 2]))
-
-        if self.log:
-            tf.summary.histogram('act_pre', pre)
-            tf.summary.histogram('act_post', post)
-    # END NoRollCaTentLayer.build_graph
