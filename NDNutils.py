@@ -244,7 +244,7 @@ def expand_input_dims_to_3d(input_size):
     return input3d
 
 
-def concatenate_input_dims(parent_input_size, added_input_size):
+def concatenate_input_dims(parent_input_size, added_input_size, network_type='normal'):
     """Utility function to concatenate two sets of input_dims vectors
     -- parent_input_size can be none, if added_input_size is first
     -- otherwise its assumed parent_input_size is already 3-d, but
@@ -261,15 +261,21 @@ def concatenate_input_dims(parent_input_size, added_input_size):
     
     """
 
-    cat_dims = expand_input_dims_to_3d(added_input_size)
 
-    if parent_input_size is not None:
-        # Sum full vector along the first dimension ("filter" dimension)
-        assert parent_input_size[1] == cat_dims[1], \
-            'First dimension of inputs do not agree.'
-        assert parent_input_size[2] == cat_dims[2], \
-            'Last dimension of inputs do not agree.'
-        cat_dims[0] += parent_input_size[0]
+    if network_type != 'sampler':
+        cat_dims = expand_input_dims_to_3d(added_input_size)
+        
+        if parent_input_size is not None:
+            # Sum full vector along the first dimension ("filter" dimension)
+            assert parent_input_size[1] == cat_dims[1], \
+                'First dimension of inputs do not agree.'
+            assert parent_input_size[2] == cat_dims[2], \
+                'Last dimension of inputs do not agree.'
+            cat_dims[0] += parent_input_size[0]
+    else:
+        # How will sampler_network handle the different input type? I imagine it would work to just 
+        # ignore dim sizes of the sample_locations, which I'm writing in here as a default 
+        cat_dims = parent_input_size
 
     return cat_dims
 

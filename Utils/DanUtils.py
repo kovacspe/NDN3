@@ -49,20 +49,15 @@ def compute_spatiotemporal_filters(ndn_mod, ffnet=None):
     num_lags = ndn_mod.networks[ffnet].layers[0].num_lags
     if num_lags == 1 and ndn_mod.networks[ffnet].layers[0].filter_dims[0] > 1:  # if num_lags was set as dim0
         num_lags = ndn_mod.networks[ffnet].layers[0].filter_dims[0]
-#    elif not num_lags == ndn_mod.networks[ffnet].layers[0].filter_dims[0]:  # new
-#        num_lags = ndn_mod.networks[ffnet].layers[0].filter_dims[0]
     if (np.prod(ndn_mod.networks[ffnet].layers[0].filter_dims[1:]) == 1) and \
         (ndn_mod.network_list[ffnet]['layer_types'][0] != 'sep'):  # then likely temporal basis
-#    if ((np.prod(ndn_mod.networks[ffnet].layers[0].filter_dims[1:]) == 1) and \
-#            (ndn_mod.network_list[ffnet]['layer_types'][0] != 'sep')) or \
-#            ndn_mod.network_list[ffnet]['layer_types'][0]=='temporal':  # new
         ks_flat = tbasis_recover_filters(ndn_mod, ffnet=ffnet)
         if len(ndn_mod.networks[ffnet].layers) > 1:
             sp_dims = ndn_mod.networks[ffnet].layers[1].filter_dims[1:]
-            other_dims = ndn_mod.networks[ffnet].layers[1].filter_dims[0] // ndn_mod.networks[0].layers[0].num_filters
+            other_dims = ndn_mod.networks[ffnet].layers[1].filter_dims[0] // ndn_mod.networks[ffnet].layers[0].num_filters
         else:
             sp_dims = ndn_mod.networks[ffnet+1].layers[0].filter_dims[1:]
-            other_dims = ndn_mod.networks[ffnet+1].layers[0].filter_dims[0] // ndn_mod.networks[0].layers[0].num_filters
+            other_dims = ndn_mod.networks[ffnet+1].layers[0].filter_dims[0] // ndn_mod.networks[ffnet].layers[0].num_filters
     else:
         # Check if separable layer
         n0 = ndn_mod.networks[ffnet].layers[0].input_dims[0] 
@@ -82,10 +77,10 @@ def compute_spatiotemporal_filters(ndn_mod, ffnet=None):
     num_filters = ks_flat.shape[-1]
 
     # Reshape filters with other_dims tucked into first spatial dimension (on outside)
-    if sp_dims[1] == 1:
+    if (sp_dims[1] == 1) or (sp_dims[0] == 1):
         ks = np.reshape(np.transpose(
-            np.reshape(ks_flat, [sp_dims[0], other_dims, num_lags, num_filters]), [1, 0, 2, 3]),
-            [sp_dims[0]*other_dims, num_lags, num_filters])
+            np.reshape(ks_flat, [np.prod(sp_dims), other_dims, num_lags, num_filters]), [1, 0, 2, 3]),
+            [np.prod(sp_dims)*other_dims, num_lags, num_filters])
     else:
         ks = np.reshape(np.transpose(
             np.reshape(ks_flat, [sp_dims[1], sp_dims[0], other_dims, num_lags, num_filters]), [2, 0, 1, 3, 4]),
@@ -184,7 +179,7 @@ def plot_filters(ndn_mod=None, filters=None, filter_dims=None, tbasis_select=-1,
 # END plot_filters
 
 
-def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False):
+def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False, ffnet=0):
 
     if ndnmod is None:
         if dims is None:
@@ -196,7 +191,7 @@ def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False):
             NK = filters.shape[-1]
             ks = np.reshape(deepcopy(filters), [np.prod(dims), NK])
     else:
-        filters = compute_spatiotemporal_filters(ndnmod)
+        filters = compute_spatiotemporal_filters(ndnmod, ffnet=ffnet)
         dims = filters.shape[:3]
         NK = filters.shape[-1]
         ks = np.reshape(deepcopy(filters), [np.prod(dims), NK])
