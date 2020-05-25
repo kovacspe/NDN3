@@ -2789,8 +2789,18 @@ class GridSampleLayer(Layer):
         #Correct output dims
         self.output_dims = n_neurons
 
-
-        
+        bias_dims = (1, n_neurons)
+        if biases_initializer == 'trunc_normal':
+            init_biases = np.random.normal(size=bias_dims, scale=0.1)
+        elif biases_initializer == 'normal':
+            init_biases = np.random.normal(size=bias_dims, scale=0.1)
+        elif biases_initializer == 'zeros':
+            init_biases = np.zeros(shape=bias_dims, dtype='float32')
+        else:
+            raise ValueError('Invalid biases_initializer ''%s''' %
+                             biases_initializer)
+        # Initialize numpy array that will feed placeholder
+        self.biases = init_biases.astype('float32')
 
     # END GridSampleLayer.__init__
 
@@ -2820,10 +2830,13 @@ class GridSampleLayer(Layer):
             else:
                 w_pn = w_p
 
-
-            field,grid_points = self._split_input(inputs)
-            h,w= self.input_dims[2],self.input_dims[1]
-
+            # field,grid_points = self._split_input(inputs)
+            assert len(inputs)==2, 'Wrong inputs'
+            field, grid_points = inputs
+            field = tf.reshape(field, (-1, self.input_dims[2], self.input_dims[1], self.input_dims[0]))
+            grid_points = tf.reshape(grid_points,(-1,self.n_neurons,2))
+            h,w = self.input_dims[2],self.input_dims[1]
+            
 
             # Find interpolation sides
             i, j = grid_points[..., 0], grid_points[..., 1]
@@ -2858,19 +2871,17 @@ class GridSampleLayer(Layer):
             q_i1 = q_11 * (1 - di) + q_21 * di
             q_i2 = q_12 * (1 - di) + q_22 * di
             outputs_shaped = q_i1 * (1 - dj) + q_i2 * dj
+            
 
-            #
             weighted_features = tf.multiply(w_pn,outputs_shaped,name='weighting')
-            weighted_sum = tf.reduce_sum(weighted_features,axis=1,name='sum_along_channels')
+            weighted_sum = tf.reduce_sum(weighted_features,axis=-1,name='sum_along_channels')
             biased_activation = tf.add(weighted_sum,self.biases_var,name='add_biases')
             neuron_activations = self._apply_act_func(biased_activation)
 
-
-            # Shape output to shape [Batch, Neurons*Channels]
-            self.outputs = tf.reshape(neuron_activations,(-1,self.n_neurons*self.input_dims[0]))
-
+            # Shape output to shape [Batch, Neurons]
+            self.outputs = tf.reshape(neuron_activations,(-1,self.n_neurons))
   
-    # END GridSampleLayer.build_graph
+        # END GridSampleLayer.build_graph
 
 
 class GridShifterLayer(Layer):
