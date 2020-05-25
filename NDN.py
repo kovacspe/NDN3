@@ -13,6 +13,7 @@ import tensorflow as tf
 
 from .ffnetwork import FFNetwork
 from .ffnetwork import SideNetwork
+from .ffnetwork import SamplerNetwork
 ## will want to import network type here (SamplerNetwork?)
 from .NDNutils import concatenate_input_dims
 from .NDNutils import process_blocks
@@ -288,56 +289,85 @@ class NDN(object):
                     # Specialized inputs to sampler-network
                     # [to be set in with any checks and call constructor defined in FFnetwork]
                     conv_network_input = None  # This should point to the network that is sampled from
-                    sample_network = None  # This should point to the network that provides the samples
-                    # It in principle can also accept exernal inputs 
-                    # I think this will require a separated network input into the ffnetwork's build_graph
-                    # so have segrated the build_graph call here
-                    self.networks[nn].build_graph(
-                        conv_network_input, sample_network,
-                        params_dict=self.network_list[nn],
-                        batch_size=batch_size, use_dropout=use_dropout)
-                else:
+                    localisation_network_input = None  # This should point to the network that provides the samples
 
-                    if self.network_list[nn]['network_type'] == 'side':
-
-                        # Specialized inputs to side-network
-                        assert self.network_list[nn]['xstim_n'] is None, \
-                            'Cannot have any external inputs into side network.'
-                        assert len(self.network_list[nn]['ffnet_n']) == 1, \
-                            'Can only have one network input into a side network.'
-                        # Pass the entire network into the input of side network
-                        input_network_n = self.network_list[nn]['ffnet_n'][0]
-                        assert input_network_n < nn, \
-                            'Must create network for side network first.'
-                        input_cat = self.networks[input_network_n]
-
-                    else:   # assume normal network
-                        # Assemble input streams -- implicitly along input axis 1
-                        # (0 is T)
-                        input_cat = None
-                        if self.network_list[nn]['xstim_n'] is not None:
-                            for ii in self.network_list[nn]['xstim_n']:
-                                if input_cat is None:
-                                    input_cat = self.data_in_batch[ii]
-                                else:
-                                    input_cat = tf.concat(
-                                        (input_cat, self.data_in_batch[ii]),
+                    if self.network_list[nn]['xstim_n'] is not None:
+                        for ii in self.network_list[nn]['xstim_n']:
+                            if conv_network_input is None:
+                                conv_network_input = self.data_in_batch[ii]
+                            else:
+                                conv_network_input = tf.concat(
+                                    (conv_network_input, self.data_in_batch[ii]),
+                                    axis=1)
+                    if self.network_list[nn]['ffnet_n'] is not None:
+                        for ii in self.network_list[nn]['ffnet_n']:
+                            if conv_network_input is None:
+                                conv_network_input = \
+                                    self.networks[ii].layers[-1].outputs
+                            else:
+                                conv_network_input = \
+                                    tf.concat(
+                                        (conv_network_input,
+                                        self.networks[ii].layers[-1].outputs),
                                         axis=1)
-                        if self.network_list[nn]['ffnet_n'] is not None:
-                            for ii in self.network_list[nn]['ffnet_n']:
-                                if input_cat is None:
-                                    input_cat = \
-                                        self.networks[ii].layers[-1].outputs
-                                else:
-                                    input_cat = \
-                                        tf.concat(
-                                            (input_cat,
-                                            self.networks[ii].layers[-1].outputs),
-                                            axis=1)
+                    if self.network_list[nn]['locationnet_n'] is not None:
+                        for ii in self.network_list[nn]['locationnet_n']:
+                            if localisation_network_input is None:
+                                localisation_network_input = \
+                                    self.networks[ii].layers[-1].outputs
+                            else:
+                                localisation_network_input = \
+                                    tf.concat(
+                                        (localisation_network_input,
+                                        self.networks[ii].layers[-1].outputs),
+                                        axis=1)
+                    # Possibly add another parameter to locationstim_n to accept input of NDN as its input
+
+                    input_cat = [conv_network_input, localisation_network_input]
+                    #self.networks[nn].build_graph(
+                    #    conv_network_input, sample_network,
+                    #    params_dict=self.network_list[nn],
+                    #    batch_size=batch_size, use_dropout=use_dropout)
+                elif self.network_list[nn]['network_type'] == 'side':
+
+                    # Specialized inputs to side-network
+                    assert self.network_list[nn]['xstim_n'] is None, \
+                        'Cannot have any external inputs into side network.'
+                    assert len(self.network_list[nn]['ffnet_n']) == 1, \
+                        'Can only have one network input into a side network.'
+                    # Pass the entire network into the input of side network
+                    input_network_n = self.network_list[nn]['ffnet_n'][0]
+                    assert input_network_n < nn, \
+                        'Must create network for side network first.'
+                    input_cat = self.networks[input_network_n]
+
+                else:   # assume normal network
+                    # Assemble input streams -- implicitly along input axis 1
+                    # (0 is T)
+                    input_cat = None
+                    if self.network_list[nn]['xstim_n'] is not None:
+                        for ii in self.network_list[nn]['xstim_n']:
+                            if input_cat is None:
+                                input_cat = self.data_in_batch[ii]
+                            else:
+                                input_cat = tf.concat(
+                                    (input_cat, self.data_in_batch[ii]),
+                                    axis=1)
+                    if self.network_list[nn]['ffnet_n'] is not None:
+                        for ii in self.network_list[nn]['ffnet_n']:
+                            if input_cat is None:
+                                input_cat = \
+                                    self.networks[ii].layers[-1].outputs
+                            else:
+                                input_cat = \
+                                    tf.concat(
+                                        (input_cat,
+                                        self.networks[ii].layers[-1].outputs),
+                                        axis=1)
 
                     # first argument for T/FFnetworks is inputs but it is input_network for scaffold
                     # so no keyword argument used below
-                    self.networks[nn].build_graph(input_cat, params_dict=self.network_list[nn],
+                self.networks[nn].build_graph(input_cat, params_dict=self.network_list[nn],
                                                 batch_size=batch_size, use_dropout=use_dropout)
 
             # Define loss function
