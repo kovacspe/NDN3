@@ -562,14 +562,8 @@ class FFNetwork(object):
                     scope='grid_shift_layer_%i' % nn,
                     input_dims=layer_sizes[nn],
                     n_neurons=layer_sizes[nn+1],
-                    activation_func=network_params['activation_funcs'][nn],
-                    normalize_weights=network_params['normalize_weights'][nn],
-                    weights_initializer=network_params['weights_initializers'][nn],
                     biases_initializer=network_params['biases_initializers'][nn],
-                    reg_initializer=network_params['reg_initializers'][nn],
-                    num_inh=network_params['num_inh'][nn],
-                    pos_constraint=network_params['pos_constraints'][nn],
-                    log_activations=network_params['log_activations']))
+                    reg_initializer=network_params['reg_initializers'][nn]))
 
             elif self.layer_types[nn] == 'grid_sample':
                 self.layers.append(GridSampleLayer(
@@ -810,3 +804,54 @@ class SideNetwork(FFNetwork):
                 self.layers[layer].build_graph(inputs, params_dict, batch_size=batch_size, use_dropout=use_dropout)
                 inputs = self.layers[layer].outputs
     # END SideNetwork.build_graph
+
+
+class SamplerNetwork(FFNetwork):
+    def __init__(self,
+                 scope=None,
+                 input_dims=None,
+                 params_dict=None):
+        self.input = None
+
+        #assert num_locations is not None, 'Number of locations must be specified'
+        #self.num_locations = num_locations
+
+        super(SamplerNetwork, self).__init__(
+            scope=scope,
+            input_dims=None,
+            params_dict=params_dict)
+        
+
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
+        """Build tensorflow graph for this network"""
+
+        # resolve inputs
+        if not isinstance(inputs,list):
+            image = inputs
+            locations = None
+        elif len(inputs)==2:
+            image, locations = inputs
+        elif len(inputs)==1:
+            image = inputs[0]
+            locations = None
+        else:
+            raise TypeError('Incorrect input shape in SamplerNetwork.')
+        
+        if locations is None:
+            # make location variable in shape self.num_locations
+            pass
+        
+        
+        with tf.name_scope(self.scope):
+            for layer in range(self.num_layers):
+                if isinstance(layer,GridSampleLayer):
+                    inputs = [inputs,locations]
+                if self.time_expand[layer] > 0:
+                    self.layers[layer].build_graph(
+                        self.time_embed(
+                            inputs=inputs, batch_sz=batch_size, num_lags=self.time_expand[layer]),
+                        params_dict, use_dropout=use_dropout)
+                else:
+                    self.layers[layer].build_graph(
+                        inputs, params_dict, batch_size=batch_size, use_dropout=use_dropout)
+                inputs = self.layers[layer].outputs
