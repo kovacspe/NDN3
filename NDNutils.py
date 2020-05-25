@@ -25,7 +25,9 @@ def ffnetwork_params(
         log_activations=False,
         conv_filter_widths=None,  # the below are for convolutional network
         shift_spacing=1,
-        dilation=1):
+        dilation=1,
+        locationnet_n=None     # the below are for sampler network
+        ):
     """generates information for the network_params dict that is passed to the
     NDN constructor.
     
@@ -80,6 +82,9 @@ def ffnetwork_params(
             filter (if different than stim_dims)
         shift_spacing (int, optional): stride used by convolution operation (default 1)
         dilation (int, optional): dilation used by convolution operation (default 1)
+
+        FOR SamplerNetwork-specific parameters:
+        locationnet_n (list of ints, optional): 
         
     Returns:
         dict: params to initialize an `FFNetwork` object
@@ -182,7 +187,8 @@ def ffnetwork_params(
         'weights_initializers': weight_inits,
         'num_inh': num_inh_layers,
         'pos_constraints': pos_constraints,
-        'log_activations': log_activations}
+        'log_activations': log_activations,
+        'locationnet_n': locationnet_n}
 
     # if convolutional, add the following convolution-specific fields
     if conv_filter_widths is not None:
@@ -261,21 +267,18 @@ def concatenate_input_dims(parent_input_size, added_input_size, network_type='no
     
     """
 
+    cat_dims = expand_input_dims_to_3d(added_input_size)
+    
+    #network type is not used currently
 
-    if network_type != 'sampler':
-        cat_dims = expand_input_dims_to_3d(added_input_size)
-        
-        if parent_input_size is not None:
-            # Sum full vector along the first dimension ("filter" dimension)
-            assert parent_input_size[1] == cat_dims[1], \
-                'First dimension of inputs do not agree.'
-            assert parent_input_size[2] == cat_dims[2], \
-                'Last dimension of inputs do not agree.'
-            cat_dims[0] += parent_input_size[0]
-    else:
-        # How will sampler_network handle the different input type? I imagine it would work to just 
-        # ignore dim sizes of the sample_locations, which I'm writing in here as a default 
-        cat_dims = parent_input_size
+    if parent_input_size is not None:
+        # Sum full vector along the first dimension ("filter" dimension)
+        assert parent_input_size[1] == cat_dims[1], \
+            'First dimension of inputs do not agree.'
+        assert parent_input_size[2] == cat_dims[2], \
+            'Last dimension of inputs do not agree.'
+        cat_dims[0] += parent_input_size[0]
+
 
     return cat_dims
 
