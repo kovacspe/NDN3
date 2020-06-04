@@ -2787,8 +2787,8 @@ class GridSampleLayer(Layer):
             pos_constraint=pos_constraint,  # note difference from layer (not anymore)
             log_activations=log_activations)
         #Correct output dims
-        self.output_dims = n_neurons
-
+        self.output_dims = [1,n_neurons,1]
+        self.same_points_in_batch  = True
         bias_dims = (1, n_neurons)
         if biases_initializer == 'trunc_normal':
             init_biases = np.random.normal(size=bias_dims, scale=0.1)
@@ -2807,7 +2807,6 @@ class GridSampleLayer(Layer):
     def _split_input(self, input): 
         field_len = np.prod(self.input_dims)
         field,grid_points = tf.split(input,[field_len,self.n_neurons*2],axis=1)
-
         field = tf.reshape(field, (-1, self.input_dims[2], self.input_dims[1], self.input_dims[0]))
         grid_points = tf.reshape(grid_points,(-1,self.n_neurons,2))
         
@@ -2837,6 +2836,10 @@ class GridSampleLayer(Layer):
             grid_points = tf.reshape(grid_points,(-1,self.n_neurons,2))
             h,w = self.input_dims[2],self.input_dims[1]
             
+            # If grid_points are same for whole batch
+            if self.same_points_in_batch:
+                tiling = tf.concat([[tf.shape(field)[0]],[1,1]],axis=0)
+                grid_points = tf.tile(grid_points,tiling)
 
             # Find interpolation sides
             i, j = grid_points[..., 0], grid_points[..., 1]

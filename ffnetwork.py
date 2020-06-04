@@ -820,32 +820,68 @@ class SamplerNetwork(FFNetwork):
             scope=scope,
             input_dims=None,
             params_dict=params_dict)
-        
 
+        self.locations=None
+        if not 'locationnet_n' in params_dict or params_dict['locationnet_n'] is None:
+            self.location_ph = None
+            self.location_var = None
+
+            assert 'num_locations' in params_dict, 'Must specify num_locations'
+
+            location_dims = (1, 2*params_dict['num_locations'])
+            location_initializer = params_dict.get('location_initializer','normal')
+            if location_initializer == 'trunc_normal':
+                init_locations = np.random.normal(size=location_dims, scale=0.1)
+            elif location_initializer == 'normal':
+                init_locations = np.random.normal(size=location_dims, scale=0.1)
+            elif location_initializer == 'zeros':
+                init_locations = np.zeros(shape=location_dims, dtype='float32')
+            else:
+                raise ValueError('Invalid location_initializer ''%s''' %
+                                location_initializer)
+            # Initialize numpy array that will feed placeholder
+            self.locations = init_locations.astype('float32')
+
+
+                
+
+    def _define_sampler_variables(self):
+        # Define tensor-flow versions of variables (placeholder and variables)
+        if self.locations is not None:
+            with tf.name_scope('locations_init'):
+                self.locations_ph = tf.placeholder_with_default(
+                    self.locations,
+                    shape=self.locations.shape,
+                    name='locations_ph')
+                self.locations_var = tf.Variable(
+                    self.locations_ph,
+                    dtype=tf.float32,
+                    name='locations_var')
+               
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
         """Build tensorflow graph for this network"""
-
-        # resolve inputs
-        if not isinstance(inputs,list):
-            image = inputs
-            locations = None
-        elif len(inputs)==2:
-            image, locations = inputs
-        elif len(inputs)==1:
-            image = inputs[0]
-            locations = None
-        else:
-            raise TypeError('Incorrect input shape in SamplerNetwork.')
-        
-        if locations is None:
-            # make location variable in shape self.num_locations
-            pass
-        
-        
         with tf.name_scope(self.scope):
+            self._define_sampler_variables()
+            # resolve inputs
+            if not isinstance(inputs,list):
+                image = inputs
+                locations = self.locations_var
+            elif len(inputs)==2:
+                image, locations = inputs
+                if locations is None:
+                    locations = self.locations_var
+                else:
+                    self.locations_var  = locations
+            elif len(inputs)==1:
+                image = inputs[0]
+                locations = self.locations_var
+            else:
+                raise TypeError('Incorrect input shape in SamplerNetwork.')
+        
+        
             for layer in range(self.num_layers):
-                if isinstance(layer,GridSampleLayer):
-                    inputs = [inputs,locations]
+                if isinstance(self.layers[layer],GridSampleLayer):
+                    inputs = [image,locations]
                 if self.time_expand[layer] > 0:
                     self.layers[layer].build_graph(
                         self.time_embed(
