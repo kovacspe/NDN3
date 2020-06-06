@@ -571,6 +571,8 @@ class NDN(object):
                     if layer in layers_to_skip[nn]:
                         fit_list[nn][layer]['weights'] = False
                         fit_list[nn][layer]['biases'] = False
+            if self.network_list[nn]['network_type'] == 'sampler':
+                fit_list[nn][0]['locations']=True    
         return fit_list
         # END NDN.set_fit_variables
 
