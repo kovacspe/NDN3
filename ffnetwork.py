@@ -857,6 +857,18 @@ class SamplerNetwork(FFNetwork):
                     self.locations_ph,
                     dtype=tf.float32,
                     name='locations_var')
+
+    def build_fit_variable_list(self, fit_parameter_list):
+        """Makes a list of variables from this network that will be fit given the fit_parameter_list"""
+        var_list = super(SamplerNetwork,self).build_fit_variable_list(fit_parameter_list)
+        
+        if fit_parameter_list[0]['locations']:
+            var_list.append(self.locations_var)
+                
+            print('adding locations to var_list')
+
+        return var_list
+    # END FFNetwork.build_fit_variable_list
                
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
         """Build tensorflow graph for this network"""
