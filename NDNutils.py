@@ -285,7 +285,7 @@ def concatenate_input_dims(parent_input_size, added_input_size, network_type='no
 
 def shift_mat(m, sh, dim, zpad=True):
     """Modern version of shift_mat_zpad, good up to 4-dimensions, with z-pad as option"""
-    shm = np.roll(m.copy(), sh, dim)
+    shm = np.roll(deepcopy(m), sh, dim)
     if zpad:
         assert m.ndim < 5, 'Cannot do more than 4 dimensions.'
         L = m.shape[dim]
@@ -351,7 +351,7 @@ def shift_mat_zpad(x, shift, dim=0):
         xcopy = np.zeros([len(x), 1])
         xcopy[:, 0] = x
     else:
-        xcopy = x.copy()
+        xcopy = deepcopy(x)
         oneDarray = False
     sz = list(np.shape(xcopy))
 
@@ -425,11 +425,14 @@ def create_time_embedding(stim, pdims, up_fac=1, tent_spacing=1):
     # If there are two spatial dims, fold them into one
     if len(sz) > 2:
         stim = np.reshape(stim, (sz[0], np.prod(sz[1:])))
+        print('Flattening stimulus to produce design matrix.')
+    elif len(sz) == 1:
+        stim = np.expand_dims(stim, axis=1)
+    sz = list(np.shape(stim))
 
     # No support for more than two spatial dimensions
     if len(sz) > 3:
-        print('More than two spatial dimensions not supported, but creating' +
-              'xmatrix anyways...')
+        print('More than two spatial dimensions not supported, but creating xmatrix anyways...')
 
     # Check that the size of stim matches with the specified stim_params
     # structure
@@ -437,7 +440,7 @@ def create_time_embedding(stim, pdims, up_fac=1, tent_spacing=1):
         print('Stimulus dimension mismatch')
         raise ValueError
 
-    modstim = stim.copy()
+    modstim = deepcopy(stim)
     # Up-sample stimulus if required
     if up_fac > 1:
         # Repeats the stimulus along the time dimension
@@ -502,7 +505,7 @@ def create_NL_embedding(stim, bounds):
         else:
             tmp[b] = 1
         tmp = np.maximum(tmp, 0)
-        NLstim[:, :, nn] = tmp.copy()
+        NLstim[:, :, nn] = deepcopy(tmp)
     print("Generated NLstim: %d x %d x %d" % (NT, NF, NNL))
     return np.reshape(NLstim, [NT, NF*NNL])
 

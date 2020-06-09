@@ -872,6 +872,9 @@ class SamplerNetwork(FFNetwork):
                
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
         """Build tensorflow graph for this network"""
+        if params_dict is None:
+            params_dict = {}
+        params_dict['same_location_in_batch'] = True
         with tf.name_scope(self.scope):
             self._define_sampler_variables()
             # resolve inputs

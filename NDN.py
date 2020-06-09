@@ -313,16 +313,28 @@ class NDN(object):
                     if self.network_list[nn]['locationnet_n'] is not None:
                         for ii in self.network_list[nn]['locationnet_n']:
                             if localisation_network_input is None:
+                                if self.network_list[nn]['computed_locations']:
+                                    localisation_network_input = \
+                                        self.networks[ii].layers[-1].outputs
+                                else:
+                                    if not isinstance(self.networks[ii],SamplerNetwork):
+                                        raise AttributeError('')
+                                    localisation_network_input = \
+                                        self.networks[ii].locations_var
+                            elif self.network_list[nn]['computed_locations']:
                                 localisation_network_input = \
-                                    self.networks[ii].locations_var
-                            elif isinstance(self.networks[ii],SamplerNetwork):
+                                    tf.concat(
+                                        (localisation_network_input,
+                                        self.networks[ii].layers[-1].outputs),
+                                        axis=1)
+                            else:
+                                if not isinstance(self.networks[ii],SamplerNetwork):
+                                    raise AttributeError('')
                                 localisation_network_input = \
                                     tf.concat(
                                         (localisation_network_input,
                                         self.networks[ii].locations_var),
                                         axis=1)
-                            else:
-                                raise NotImplementedError('')
                     # Possibly add another parameter to locationstim_n to accept input of NDN as its input
 
                     input_cat = [conv_network_input, localisation_network_input]

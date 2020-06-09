@@ -2829,7 +2829,6 @@ class GridSampleLayer(Layer):
             else:
                 w_pn = w_p
 
-            # field,grid_points = self._split_input(inputs)
             assert len(inputs)==2, 'Wrong inputs'
             field, grid_points = inputs
             field = tf.reshape(field, (-1, self.input_dims[2], self.input_dims[1], self.input_dims[0]))
