@@ -641,6 +641,13 @@ class FFNetwork(object):
             reg_loss = tf.add_n(reg_ops)
         return reg_loss
 
+    def get_weights( self, layer_target, w_range=None, reshape=False ):
+        """Return a matrix with the desired weights from the NDN. Can select subset of weights using
+        w_range (default is return all), and can also reshape based on the filter dims (setting reshape=True).
+        """
+        assert layer_target < self.num_layers, 'layer_target exceeds number of layers.'
+        return self.layers[layer_target].get_weights( w_range=w_range, reshape=reshape)  
+
     @staticmethod
     def time_embed(inputs, batch_sz, num_lags):
         """Makes time-embedded input via matrix transformation"""

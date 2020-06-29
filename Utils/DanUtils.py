@@ -34,10 +34,12 @@ def tbasis_recover_filters(ndn_mod, ffnet=None):
 
     assert np.prod(ndn_mod.networks[ffnet].layers[0].filter_dims[1:]) == 1, 'only works with temporal-only basis'
 
-    if ndn_mod.networks[ffnet].layers[0].filter_basis is None:
-        tkerns = ndn_mod.networks[ffnet].layers[0].weights
+
+    if hasattr(ndn_mod.networks[ffnet].layers[0], 'filter_basis') and \
+        ndn_mod.networks[ffnet].layers[0].filter_basis is not None:
+        tkerns = ndn_mod.networks[ffnet].layers[0].filter_basis@ndn_mod.networks[ffnet].layers[0].weights        
     else:
-        tkerns = ndn_mod.networks[ffnet].layers[0].filter_basis@ndn_mod.networks[ffnet].layers[0].weights
+        tkerns = ndn_mod.networks[ffnet].layers[0].weights
     
     num_lags, num_tkerns = tkerns.shape
     
@@ -212,7 +214,7 @@ def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False, ffnet
         NK = filters.shape[-1]
         ks = np.reshape(deepcopy(filters), [np.prod(dims), NK])
 
-    ncol = 8
+    ncol = np.minimum(8, 2*NK)
     nrow = np.ceil(2 * NK / ncol).astype(int)
     subplot_setup(nrow, ncol)
     for nn in range(NK):
@@ -250,6 +252,15 @@ def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False, ffnet
     plt.show()
 # END plot_3dfilters
 
+
+def plot_scatter( xs, ys, clr='g' ):
+    assert len(xs) == len(ys), 'data dont match'
+    for nn in range(len(xs)):
+        plt.plot([xs[nn]], [ys[nn]], clr+'o', fillstyle='full')
+        if clr != 'k':
+            plt.plot([xs[nn]], [ys[nn]], 'ko', fillstyle='none')
+    #plt.show()
+    
 
 def plot_internal_weights(ws, num_inh=None):
     ws_play = deepcopy(ws)
@@ -1084,6 +1095,24 @@ def matlab_export(filename, variable_list):
         matdata[key_name] = variable_list[nn]
 
     sio.savemat(filename, matdata)
+
+
+def save_python_data( filename, data ):
+    with open( filename, 'wb') as f:
+        np.save(f, data)
+    print( 'Saved data to', filename )
+
+
+def load_python_data( filename, show_keys=False ):
+
+    with open( filename, 'rb') as f:
+        data = np.load(f, allow_pickle=True)
+    print( 'Loaded data from', filename )
+    if len(data.shape) == 0:
+        data = data.flat[0]  # to rescue dictionaries
+    if (type(data) is dict) and show_keys:
+        print(data.keys())
+    return data
 
 
 def entropy(dist):

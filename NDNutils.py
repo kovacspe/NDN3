@@ -627,7 +627,7 @@ def process_blocks(block_inds, data_filters, batch_size=2000, skip=20):
         av_size += np.max([block_inds[nn, 1] - block_inds[nn, 0] - skip+1, 0])
         block_lists.append(np.array(range(block_inds[nn, 0]-1, block_inds[nn, 1]), dtype='int'))
 
-    comb_number = np.round(batch_size/av_size*num_blocks).astype(int)
+    comb_number = np.maximum(np.round(batch_size/av_size*num_blocks).astype(int), 1)
     for nn in range(len(data_filters)):
         mod_df[nn] = data_filters[nn]*np.expand_dims(val_inds,1)
 
