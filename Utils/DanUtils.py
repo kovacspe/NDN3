@@ -10,6 +10,22 @@ from copy import deepcopy
 from sklearn.preprocessing import normalize as sk_normalize
 
 
+## GENERAL PLOTTING HACKS ##
+def plot_norm( k, ksize = [36,20], cmap='gray', max_val=None):
+    if max_val is None:
+        max_val = np.max(abs(k))
+    if len(k.shape) > 1:  # then already reshaped
+        kr = k
+    else:
+        kr = np.reshape(k, ksize)
+    plt.imshow(kr, cmap=cmap, vmin=-max_val, vmax=max_val, aspect='auto')
+
+
+def subplot_setup(num_rows, num_cols, row_height=2):
+    fig, ax = plt.subplots(nrows=num_rows, ncols=num_cols)
+    fig.set_size_inches(16, row_height*num_rows)
+
+
 ## EXTRACT FILTER FROM NDN -- Various  functions
 def tbasis_recover_filters(ndn_mod, ffnet=None):
 
@@ -18,10 +34,12 @@ def tbasis_recover_filters(ndn_mod, ffnet=None):
 
     assert np.prod(ndn_mod.networks[ffnet].layers[0].filter_dims[1:]) == 1, 'only works with temporal-only basis'
 
-    if ndn_mod.networks[ffnet].layers[0].filter_basis is None:
-        tkerns = ndn_mod.networks[ffnet].layers[0].weights
+
+    if hasattr(ndn_mod.networks[ffnet].layers[0], 'filter_basis') and \
+        ndn_mod.networks[ffnet].layers[0].filter_basis is not None:
+        tkerns = ndn_mod.networks[ffnet].layers[0].filter_basis@ndn_mod.networks[ffnet].layers[0].weights        
     else:
-        tkerns = ndn_mod.networks[ffnet].layers[0].filter_basis@ndn_mod.networks[ffnet].layers[0].weights
+        tkerns = ndn_mod.networks[ffnet].layers[0].weights
     
     num_lags, num_tkerns = tkerns.shape
     
@@ -196,7 +214,7 @@ def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False, ffnet
         NK = filters.shape[-1]
         ks = np.reshape(deepcopy(filters), [np.prod(dims), NK])
 
-    ncol = 8
+    ncol = np.minimum(8, 2*NK)
     nrow = np.ceil(2 * NK / ncol).astype(int)
     subplot_setup(nrow, ncol)
     for nn in range(NK):
@@ -227,13 +245,22 @@ def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False, ffnet
         ax.set_xticks([])
         ax.set_yticks([])
         ax = plt.subplot(nrow, ncol, 2*nn+2)
-        plt.imshow(ksp, cmap='Greys', vmin=-np.max(abs(ks[:, nn])), vmax=np.max(abs(ks[:, nn])))
+        plt.imshow(ksp, interpolation='none', cmap='Greys', vmin=-np.max(abs(ks[:, nn])), vmax=np.max(abs(ks[:, nn])))
         plt.title('lag=' + str(bestlag))
         ax.set_xticks([])
         ax.set_yticks([])
     plt.show()
 # END plot_3dfilters
 
+
+def plot_scatter( xs, ys, clr='g' ):
+    assert len(xs) == len(ys), 'data dont match'
+    for nn in range(len(xs)):
+        plt.plot([xs[nn]], [ys[nn]], clr+'o', fillstyle='full')
+        if clr != 'k':
+            plt.plot([xs[nn]], [ys[nn]], 'ko', fillstyle='none')
+    #plt.show()
+    
 
 def plot_internal_weights(ws, num_inh=None):
     ws_play = deepcopy(ws)
@@ -311,7 +338,7 @@ def side_network_analyze(side_ndn, cell_to_plot=None, plot_aspect='auto'):
     for ll in range(num_layers):
         #wtemp = wside[range(ll, len(wside), num_layers), :]
         wtemp = wside[:, range(fcount, fcount+filter_nums[ll]), :]
-        ws.append(wtemp.copy())
+        ws.append(deepcopy(wtemp))
         fcount += filter_nums[ll]
 
         if cell_to_plot is not None:
@@ -368,7 +395,7 @@ def spatial_profile_info(xprofile):
     if isinstance(xprofile, list):
         k = np.square(np.array(xprofile))
     else:
-        k = np.square(xprofile.copy())
+        k = np.square(deepcopy(xprofile))
 
     NX = xprofile.shape[0]
 
@@ -384,7 +411,7 @@ def spatial_spread(filters, axis=0):
     """Calculate the spatial spread of a list of filters along one dimension"""
 
     # Calculate mean of filter
-    k = np.square(filters.copy())
+    k = np.square(deepcopy(filters))
     if axis > 0:
         k = np.transpose(k)
     NX, NF = filters.shape
@@ -558,7 +585,7 @@ def scaffold_density(side_ndn, internal_ws=True):
         np.divide(side_ndn.networks[2].layers[0].weights, np.sum(side_ndn.networks[2].layers[0].weights,axis=0)),
         [NX, NU, NCtot])
     sc_density = np.sum(ws, axis=2)
-    scd_pm = sc_density.copy()
+    scd_pm = deepcopy(sc_density)
     #plt.imshow(sc_density, cmap='YlOrRd')
     for nn in range(len(num_units)):
         barrier = np.sum(num_units[:(nn+1)])
@@ -579,10 +606,10 @@ def scaffold_density(side_ndn, internal_ws=True):
         plt.plot(np.sum(sc_density[:,rng], axis=0), 'k')
         maxw = np.max(np.sum(sc_density,axis=0))
         if internal_ws and nn < (num_lvls-1):
-            int_ws = side_ndn.networks[1].layers[nn+1].weights.copy()
+            int_ws = deepcopy(side_ndn.networks[1].layers[nn+1].weights)
             int_ws = np.sum(np.sum(
                 np.reshape(
-                    side_ndn.networks[1].layers[nn+1].weights.copy(), 
+                    deepcopy(side_ndn.networks[1].layers[nn+1].weights), 
                     [cfws[nn+1]*tes[nn+1], num_units[nn], num_units[nn+1]]), 
                 axis=2), axis=0)
             maxw2 = np.max(int_ws)
@@ -609,12 +636,12 @@ def evaluate_ffnetwork_units(ffnet, end_weighting=None, to_plot=False, thresh_li
     prev_ws = np.divide(prev_ws, np.mean(prev_ws))
 
     node_eval = [[]]*num_layers
-    node_eval[-1] = prev_ws.copy()
+    node_eval[-1] = deepcopy(prev_ws)
     for nn in range(num_layers-1):
-        ws = ffnet.layers[num_layers-1-nn].weights.copy()
+        ws = deepcopy(ffnet.layers[num_layers-1-nn].weights)
         next_ws = np.matmul(np.square(ws), prev_ws)
-        node_eval[num_layers-nn-2] = np.divide(next_ws.copy(), np.mean(next_ws))
-        prev_ws = next_ws.copy()
+        node_eval[num_layers-nn-2] = np.divide(deepcopy(next_ws), np.mean(next_ws))
+        prev_ws = deepcopy(next_ws)
 
     # Determine units to drop (if any)
     units_to_drop = [[]]*num_layers
@@ -724,7 +751,6 @@ def ffnet_health(ndn_mod, toplot=True):
         plt.show()
 
     return whealth, bhealth
-
 
 
 def prune_ndn(ndn_mod, end_weighting=None, thresh_list=None, percent_drop=None):
@@ -920,7 +946,7 @@ def side_ei_analyze(side_ndn):
 
     fcount = 0
     for ll in range(num_layers):
-        ws = wside[:, range(fcount, fcount+num_units[ll]), :].copy()
+        ws = deepcopy(wside[:, range(fcount, fcount+num_units[ll]), :])
         fcount += num_units[ll]
         if num_inh[ll] == 0:
             ews = np.maximum(ws, 0)
@@ -961,7 +987,7 @@ def scaffold_nonconv_plot( side_ndn, with_inh=True, nolabels=True, skip_first_le
     plt.rcParams['lines.linewidth'] = linewidth
     plt.rcParams['axes.linewidth'] = linewidth
     for ll in range(num_layers):
-        ws = np.transpose(np.divide(scaff_ws[range(fcount, fcount+num_units[ll]), :].copy(), cell_nrms))
+        ws = np.transpose(np.divide(deepcopy(scaff_ws[range(fcount, fcount+num_units[ll]), :]), cell_nrms))
 
         fcount += num_units[ll]
         if (num_inh[ll] > 0) and with_inh:
@@ -1014,7 +1040,7 @@ def scaffold_plot_cell(side_ndn, cell_n, with_inh=True, nolabels=True, skip_firs
     plt.rcParams['lines.linewidth'] = linewidth
     plt.rcParams['axes.linewidth'] = linewidth
     for ll in range(num_layers):
-        ws = np.divide(wside[:, range(fcount, fcount+num_units[ll]), cell_n].copy(), cell_nrms[cell_n])
+        ws = np.divide(deepcopy(wside[:, range(fcount, fcount+num_units[ll]), cell_n]), cell_nrms[cell_n])
 
         fcount += num_units[ll]
         if (num_inh[ll] > 0) and with_inh:
@@ -1042,9 +1068,14 @@ def scaffold_plot_cell(side_ndn, cell_n, with_inh=True, nolabels=True, skip_firs
 
 
 ## RANDOM UTILITY FUNCTIONS
-def subplot_setup(num_rows, num_cols, row_height=2):
-    fig, ax = plt.subplots(nrows=num_rows, ncols=num_cols)
-    fig.set_size_inches(16, row_height*num_rows)
+def figure_export( fig_handle, filename, bitmap=False, dpi=300):
+    """Usage: figure_export( fig_handle, filename, variable_list, bitmap=False, dpi=300)
+    if bitmap, will use dpi and export as .png. Otherwise will export PDF"""
+
+    if bitmap:
+        fig_handle.savefig( filename, bbox_inches='tight', dpi=dpi)
+    else:
+        fig_handle.savefig( filename, bbox_inches='tight')
 
 
 def matlab_export(filename, variable_list):
@@ -1066,58 +1097,22 @@ def matlab_export(filename, variable_list):
     sio.savemat(filename, matdata)
 
 
-def binocular_matlab_export(binoc_mod, filename):
-    """Export binocular model (including filter calc) to .mat file"""
-
-    import scipy.io as sio
-    matdata = {}
-    for nn in range(binoc_mod.num_networks):
-        for ll in range(len(binoc_mod.networks[nn].layers)):
-            wstring = 'ws' + str(nn) + str(ll)
-            matdata[wstring] = binoc_mod.networks[nn].layers[ll].weights
-            bstring = 'bs' + str(nn) + str(ll)
-            matdata[bstring] = binoc_mod.networks[nn].layers[ll].biases
-
-    bfilts = binocular_compute_filters(binoc_mod=binoc_mod, to_plot=False)
-    matdata['bfilts'] = bfilts
-    sio.savemat(filename, matdata)
+def save_python_data( filename, data ):
+    with open( filename, 'wb') as f:
+        np.save(f, data)
+    print( 'Saved data to', filename )
 
 
-def binocular_compute_filters(binoc_mod, to_plot=True):
+def load_python_data( filename, show_keys=False ):
 
-    # Find binocular layer
-    blayer, bnet = None, None
-    for mm in range(len(binoc_mod.networks)):
-        for nn in range(len(binoc_mod.networks[mm].layers)):
-            if binoc_mod.network_list[mm]['layer_types'][nn] == 'biconv':
-                if nn < len(binoc_mod.networks[mm].layers) - 1:
-                    bnet, blayer = mm, nn + 1
-                elif mm < len(binoc_mod.networks) - 1:
-                    bnet, blayer = mm + 1, 0  # split in hierarchical network
-    assert blayer is not None, 'biconv layer not found'
-
-    NF = binoc_mod.networks[0].layers[blayer].output_dims[0]
-    Nin = binoc_mod.networks[0].layers[blayer].input_dims[0]
-    NX = binoc_mod.networks[0].layers[blayer].filter_dims[1]
-    ks1 = compute_spatiotemporal_filters(binoc_mod)
-    ws = np.reshape(binoc_mod.networks[0].layers[blayer].weights, [NX, Nin, NF])
-    num_lags = binoc_mod.networks[0].layers[0].input_dims[0]
-    if binoc_mod.networks[0].layers[0].filter_dims[1] > 1:  # then not temporal layer
-        filter_dims = [num_lags, binoc_mod.networks[0].layers[0].filter_dims[1]]
-    else:
-        filter_dims = [num_lags, binoc_mod.networks[0].layers[1].filter_dims[1]]
-    nfd = [filter_dims[0], filter_dims[1] + NX]
-    # print(filter_dims, nfd)
-    Bfilts = np.zeros(nfd + [NF, 2])
-    for nn in range(NX):
-        Bfilts[:, np.add(range(filter_dims[1]), nn), :, 0] += np.reshape(
-            np.matmul(ks1, ws[nn, range(Nin // 2), :]), [filter_dims[1], filter_dims[0], NF])
-        Bfilts[:, np.add(range(filter_dims[1]), nn), :, 1] += np.reshape(
-            np.matmul(ks1, ws[nn, range(Nin // 2, Nin), :]), [filter_dims[1], filter_dims[0], NF])
-    bifilts = np.concatenate((Bfilts[:, :, :, 0], Bfilts[:, :, :, 1]), axis=1)
-    if to_plot:
-        plot_filters(filters=bifilts, flipxy=True)
-    return bifilts
+    with open( filename, 'rb') as f:
+        data = np.load(f, allow_pickle=True)
+    print( 'Loaded data from', filename )
+    if len(data.shape) == 0:
+        data = data.flat[0]  # to rescue dictionaries
+    if (type(data) is dict) and show_keys:
+        print(data.keys())
+    return data
 
 
 def entropy(dist):

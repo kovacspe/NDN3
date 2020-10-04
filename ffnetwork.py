@@ -21,8 +21,8 @@ class FFNetwork(object):
         num_layers (int): number of layers in network (not including input)
         layer_types (list of strs): a string for each layer in the network that 
             specifies its type.
-            'normal' | 'sep' | 'conv' | 'convsep' | 'biconv' | 'add' | 'spike_history'
-                    | 'convLNL'
+            'normal' | 'sep' | 'conv' | 'convsep' | 'biconv' | 'add' | 'mult' | 'spike_history'
+                    | 'convLNL' | 'dim0'
         layers (list of `Layer` objects): layers of network
         log (bool): use tf summary writers in layer activations
 
@@ -282,6 +282,21 @@ class FFNetwork(object):
                     pos_constraint=network_params['pos_constraints'][nn],
                     log_activations=network_params['log_activations']))
 
+            elif self.layer_types[nn] == 'dim0':
+
+                self.layers.append(Dim0Layer(
+                    scope='dim0_layer_%i' % nn,
+                    input_dims=layer_sizes[nn],
+                    output_dims=layer_sizes[nn+1],
+                    activation_func=network_params['activation_funcs'][nn],
+                    normalize_weights=network_params['normalize_weights'][nn],
+                    weights_initializer=network_params['weights_initializers'][nn],
+                    biases_initializer=network_params['biases_initializers'][nn],
+                    reg_initializer=network_params['reg_initializers'][nn],
+                    num_inh=network_params['num_inh'][nn],
+                    pos_constraint=network_params['pos_constraints'][nn],
+                    log_activations=network_params['log_activations']))
+
             elif self.layer_types[nn] == 'filter':
 
                 self.layers.append(FilterLayer(
@@ -409,6 +424,17 @@ class FFNetwork(object):
                     pos_constraint=network_params['pos_constraints'][nn],
                     log_activations=network_params['log_activations']))
 
+            elif self.layer_types[nn] == 'diff_of_gaussians':
+                self.layers.append(DiffOfGaussiansLayer(
+                    scope='diff_of_gaussians_%i' % nn,
+                    input_dims=layer_sizes[nn],
+                    num_filters=layer_sizes[nn + 1],              
+                    bounds=network_params['bounds'][nn] if 'bounds' in network_params else None,
+                    activation_func=network_params['activation_funcs'][nn],
+                    weights_initializer=network_params['weights_initializers'][nn],
+                    biases_initializer=network_params['biases_initializers'][nn],
+                    num_inh=network_params['num_inh'][nn],
+                    log_activations=network_params['log_activations']))
             elif self.layer_types[nn] == 'conv_xy':
 
                 if network_params['conv_filter_widths'][nn] is not None:
@@ -646,6 +672,13 @@ class FFNetwork(object):
             # ...then sum over all layers
             reg_loss = tf.add_n(reg_ops)
         return reg_loss
+
+    def get_weights( self, layer_target, w_range=None, reshape=False ):
+        """Return a matrix with the desired weights from the NDN. Can select subset of weights using
+        w_range (default is return all), and can also reshape based on the filter dims (setting reshape=True).
+        """
+        assert layer_target < self.num_layers, 'layer_target exceeds number of layers.'
+        return self.layers[layer_target].get_weights( w_range=w_range, reshape=reshape)  
 
     @staticmethod
     def time_embed(inputs, batch_sz, num_lags):

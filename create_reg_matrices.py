@@ -79,7 +79,7 @@ def create_tikhonov_matrix(stim_dims, reg_type, boundary_conditions=None):
 
     if nPix == 1:  # for 0-spatial-dimensional stimuli can only do temporal
 
-        assert reg_type == 'd2t', 'Can only do temporal reg for stimuli without spatial dims'
+        assert reg_type == 'd2t', 'Using stimuli with no spatial dimensions: ' + reg_type + ' not possible.'
 
         Tmat = sp.spdiags(np.concatenate((et, -2 * et, et), axis=0), [-1, 0, 1], nLags, nLags)
         # Python makes them transposed relative to matlab -- making the following necessary in

@@ -775,3 +775,47 @@ class UnitRegularization(Regularization):
             reg_pen = tf.constant(0.0)
         return reg_pen
     # END UnitRegularization._calc_reg_penalty
+
+class OutputRegularization(Regularization):
+    """Child class that adjusts regularization for output of layers"""
+
+    def __init__(self,
+                 input_dims=None,
+                 vals=None,
+                 network_target=None,
+                 layer_target=None):
+
+        """Constructor for Sep_Regularization object
+        
+        Args:
+            input_dims (int): dimension of input size (for building reg mats)
+            num_outputs (int): number of outputs (for normalization in norm2)
+            vals (dict, optional): key-value pairs specifying value for each
+                type of regularization
+        """
+
+        super(OutputRegularization, self).__init__(
+            input_dims=input_dims,
+            num_outputs=input_dims[-2],
+            vals=vals)
+
+        self.network_target = network_target
+        self.layer_target = layer_target
+    # END SepRegularization.__init__
+
+    def reg_copy(self):
+        """Copy regularization to new structure"""
+
+        from copy import deepcopy
+
+        reg_target = OutputRegularization(
+            input_dims=self.input_dims,
+            network_target=self.network_target,
+            layer_target=self.layer_target)
+        reg_target.vals = self.vals.copy()
+        reg_target.mats = {}
+        if self.blocks is not None:
+            reg_target.blocks = deepcopy(self.blocks)
+
+        return reg_target
+    # END UnitRegularization.reg_copy
