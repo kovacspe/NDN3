@@ -11,6 +11,7 @@ import shutil
 import numpy as np
 import tensorflow as tf
 
+from .regularization import OutputRegularization
 from .ffnetwork import FFNetwork
 from .ffnetwork import SideNetwork
 from .ffnetwork import SamplerNetwork
@@ -120,7 +121,7 @@ class NDN(object):
         # end from old network.py
 
         self.batch_size = batch_size
-        self.time_spread = None
+        self.time_spread = 0
 
         # Set network_list
         if not isinstance(network_list, list):
@@ -154,6 +155,13 @@ class NDN(object):
         self.output_sizes = [0] * len(ffnet_out)
         self.noise_dist = noise_dist
         self.tf_seed = tf_seed
+        self.output_reg = []
+
+        # The seeds need to be set here as well (before weights get initiated as part of ._define_network)
+        # ..because otherwise they only get applied in ._build_graph which happens only after ._define_network
+        # ..(e.g. on .train(..)) and thus doesn't affect weight initialization only runtime.
+        np.random.seed(tf_seed)
+        tf.set_random_seed(tf_seed)
 
         self._define_network()
 
@@ -240,11 +248,13 @@ class NDN(object):
             
             # Track temporal spread
             if self.networks[nn].time_spread > 0:
-                if self.time_spread is None:
+                if self.time_spread == 0:
                     self.time_spread = self.networks[nn].time_spread
                 else:
-                    # For now assume serial procuessing (fix latter for parallel?)
-                    self.time_spread += self.networks[nn].time_spread
+                    # For now assume parallel procuessing 
+                    if (self.time_spread > 0) and (self.networks[nn].time_spread > 0):
+                        print( 'Warning: using parallel (max) of time_spread from multiple FFnetworks. Be sure to check.')
+                    self.time_spread = np.maximum(self.time_spread, self.networks[nn].time_spread)
 
         # Assemble outputs
         for nn in range(len(self.ffnet_out)):
@@ -424,12 +434,8 @@ class NDN(object):
         unit_cost = []
         unit_corr = []
         for nn in range(len(self.ffnet_out)):
-            if self.time_spread is None:
-                time_spread = 0
-                #data_out = self.data_out_batch[nn]
-            else:
-                time_spread = self.time_spread
-                #data_out = tf.slice(self.data_out_batch[nn], [self.time_spread, 0], [-1, -1])
+            time_spread = self.time_spread
+            #data_out = tf.slice(self.data_out_batch[nn], [self.time_spread, 0], [-1, -1])
 
             if self.filter_data:
                 # this will zero out predictions where there is no data, matching Robs here
@@ -558,9 +564,16 @@ class NDN(object):
             for nn in range(self.num_networks):
                 reg_costs.append(self.networks[nn].define_regularization_loss())
         self.cost_reg = tf.add_n(reg_costs)
-
-        self.cost_penalized = tf.add(self.cost, self.cost_reg)
-
+        
+        # output regularization
+        if len(self.output_reg)==0:
+            self.cost_penalized = tf.add(self.cost, self.cost_reg)
+        else:
+            reg_costs = []
+            with tf.name_scope('output_regularization'):
+                self.cost_output_reg = self.calc_output_reg()     
+            self.cost_penalized = tf.add_n([self.cost, self.cost_reg, self.cost_output_reg])
+            
         # save summary of cost
         # with tf.variable_scope('summaries'):
         tf.summary.scalar('cost', self.cost)
@@ -589,6 +602,10 @@ class NDN(object):
         with self.graph.as_default():
             for nn in range(self.num_networks):
                 self.networks[nn].assign_reg_vals(sess)
+
+            for nn in range(len(self.output_reg)):
+                self.output_reg[nn].assign_reg_vals(sess)
+
 
     def _build_fit_variable_list(self, fit_parameter_list):
         """Generates variable list to fit if argument is not none.
@@ -768,9 +785,94 @@ class NDN(object):
         return cost_tr
     # END get_LL
 
+    def eval_preds(self, input_data=None, preds=None, 
+                    output_data=None, data_indxs=None, blocks=None,
+                    data_filters=None, nulladjusted=False, use_gpu=False, use_dropout=False):
+        """Get cost for each output neuron without regularization terms
+
+        Args:
+            input_data (time x input_dim numpy array): input to model. Don't need if passing 'preds' only
+            preds (time x output_dim numpy array): predictions calculated from model, as alternative to
+                putting in input_data. This has to have same size as output_data
+            output_data (time x output_dim numpy array): desired output of model
+            data_indxs (numpy array, optional): indexes of data to use in
+                calculating forward pass; if not supplied, all data is used
+            data_filters (time x output_dim numpy array, optional): array of zeros and ones showing
+                where output_data is valid
+            blocks (num_blocks x 2): if data is broken into blocks, then corresponds to start- and
+                end-indices of each block in data. If set, then interpret data_indxs as numbering
+                the blocks to use (rather than indices themselves)
+            nulladjusted (bool): subtracts the log-likelihood of a "null" model that has constant
+                [mean] firing rate
+            use_gpu (boolean, default False): forces eval_preds on CPU (to avoid potential memory
+                issues on GPU that lead to kernel crashing)
+            use_dropout (boolean, default False): whether to use dropout settings
+
+        Returns:
+            numpy array: value of log-likelihood for each unit in model. For
+                Poisson noise distributions, if not null-adjusted, this will
+                return the *negative* log-likelihood. Null-adjusted will be
+                positive if better than the null-model.
+        """
+
+        if blocks is not None:
+            print('blocks not implemented yet. should be pretty easy though.')
+
+        if preds is not None:
+            if input_data is not None:
+                print( 'preds provided, so ignoring input_data')
+        else:
+            assert input_data is not None, 'Must provide either input_data or preds.'
+            preds = self.generate_prediction(input_data = input_data, use_gpu=use_gpu)
+
+        if data_indxs is None:
+            data_indxs = range(self.time_spread, preds.shape[0])
+
+        if data_filters is not None:
+            R = np.multiply( output_data[data_indxs, :], data_filters[data_indxs, :] )
+            p = np.multiply( preds[data_indxs, :], data_filters[data_indxs, :] )
+            dfs = data_filters[data_indxs, :]
+        else:
+            R = output_data[data_indxs, :]
+            p = preds[data_indxs, :]
+            dfs = None
+
+        if self.noise_dist == 'gaussian':
+            unit_cost = np.sum( np.square(R-p), axis=0 )
+            # unit_cost.append(tf.reduce_sum(tf.square(data_out-pred), axis=0)) # unnormalized
+            cost_norm = len(data_indxs)
+
+        elif self.noise_dist == 'poisson':
+            unit_cost = -np.sum(
+                            np.multiply(R, np.log(self._log_min + p)) - p,
+                            axis=0)
+            cost_norm = np.maximum(np.sum(R, axis=0), 1e-8)
+        
+        elif self.noise_dist == 'bernoulli':
+            unit_cost = np.sum( np.multiply( 1-R, p ) + np.log(1 + np.exp(-p)), axis = 0)
+            #tf.nn.sigmoid_cross_entropy_with_logits(labels=data_out, logits=pred), axis=0))
+            cost_norm = np.maximum(np.sum(R, axis=0), 1e-8)
+        else:
+            TypeError('Cost function not supported.')
+
+        ll_neuron = np.divide( unit_cost, cost_norm)
+        # note that ll_neuron is negative of the true log-likelihood,
+        # but get_null_ll is not (so + is actually subtraction)
+        if nulladjusted:
+            null_lls = self.get_null_ll( R, dfs ) 
+            ll_neuron = -ll_neuron - null_lls
+
+        return ll_neuron
+
     def eval_models(self, input_data=None, output_data=None, data_indxs=None, blocks=None,
                     data_filters=None, nulladjusted=False, use_gpu=False, use_dropout=False):
         """Get cost for each output neuron without regularization terms
+
+        Note: this uses the NDN._define_loss explicitly, so should be an identical calulation as 
+        that performed within the fitting blocks. However, if self.time_spread > 0, _define_loss 
+        will ignore time points at the beginning of each batch. The alternative is to use eval_pred, 
+        (which will use self.generate_prediction to generate seemless prediction) and then will apply
+        the same cost-functions to that.
 
         Args:
             input_data (time x input_dim numpy array): input to model
@@ -802,10 +904,7 @@ class NDN(object):
             assert blocks is None, 'Cannot use blocks: variable batch size not permitted.'
             
         # arrange parameters that affect data processing
-        if self.time_spread is None:
-            time_spread = 0
-        else:
-            time_spread = self.time_spread
+        time_spread = self.time_spread
 
         if blocks is None:
             if data_indxs is None:
@@ -827,7 +926,7 @@ class NDN(object):
             if self.time_spread > 0:
                 block_lists, mod_df, _ = process_blocks(blocks, mod_df, skip=self.time_spread)
             else:  # enter default time spread in between blocks
-                print("WARNING: no time-spread entered for using blocks. Setting to 20.")
+                print("WARNING: no time-spread entered for using blocks. Setting to 12.")
                 self.time_spread = 12
             # data_indxs is number of blocks    
             num_batches_test = len(data_indxs)
@@ -918,7 +1017,7 @@ class NDN(object):
                     #unit_norms = np.multiply(deepcopy(self.poisson_unit_norm), len(data_indxs))
                     #np.sum(mod_df[nn][data_indxs, :], axis=0)) # default only normalized by total time vs. amt of data
             ll_neuron.append(np.divide(np.squeeze(unit_cost[nn]), np.maximum(unit_norms, 1)))   
-        
+
         if nulladjusted:
             # note that ll_neuron is negative of the true log-likelihood,
             # but get_null_ll is not (so + is actually subtraction)
@@ -985,9 +1084,10 @@ class NDN(object):
         else:
             batch_size_save = None
 
-        # Get prediction for complete range
-        #num_batches_test = data_indxs.shape[0] // self.batch_size
-        num_batches_test = np.ceil(data_indxs.shape[0]/self.batch_size).astype(int)
+        # Calculate number of batches to extend over whole experiment
+        bsize_eff = self.batch_size - self.time_spread
+        assert bsize_eff > 0, 'Batch size is too small given time_spread.'
+        num_batches_test = np.ceil(data_indxs.shape[0]/bsize_eff).astype(int)
 
         # Place graph operations on CPU
         if not use_gpu:
@@ -1004,22 +1104,25 @@ class NDN(object):
             t0 = 0  # default unless there is self.time_spread
 
             for batch_test in range(num_batches_test):
+                
 
-                if self.time_spread is None:
-                    indx_beg = batch_test * self.batch_size
+                if self.time_spread == 0:
+                    indx_beg = batch_test * bsize_eff
                 else:
-                    if self.time_spread < batch_test * self.batch_size:
-                        indx_beg = batch_test * self.batch_size - self.time_spread
+                    if self.time_spread < batch_test * bsize_eff:
+                        indx_beg = batch_test * bsize_eff - self.time_spread
                         t0 = self.time_spread
                     else:
                         indx_beg = 0
-                        t0 = batch_test * self.batch_size
+                        t0 = batch_test * bsize_eff
 
-                indx_end = (batch_test + 1) * self.batch_size
+                indx_end = (batch_test + 1) * bsize_eff
                 if indx_end > data_indxs.shape[0]:
                     indx_end = data_indxs.shape[0]
 
-                batch_indxs_test = data_indxs[indx_beg:indx_end]
+                # print("batch %d, t0: %d" %(batch_test, t0))
+                
+                batch_indxs_test = data_indxs[indx_beg:indx_end] # this should always = self.batch_size
                 if self.data_pipe_type == 'data_as_var':
                     feed_dict = {self.indices: batch_indxs_test}
                 elif self.data_pipe_type == 'feed_dict':
@@ -1086,6 +1189,25 @@ class NDN(object):
 
         return reg_dict
 
+    def initialize_output_reg( self, network_target=None, layer_target=None, reg_vals=None):
+        
+        # make checks
+        num_outputs = np.prod(self.networks[network_target].layers[layer_target].output_dims)
+        
+        self.output_reg.append(OutputRegularization(input_dims=[self.batch_size, 1, 1],
+            network_target=network_target,layer_target=layer_target, vals=reg_vals))
+
+    def calc_output_reg( self ):
+        reg_list = []
+        for rr in range(len(self.output_reg)):
+            ntarg = self.output_reg[rr].network_target
+            ltarg = self.output_reg[rr].layer_target
+            reg_list.append( self.output_reg[rr].define_reg_loss(self.networks[ntarg].layers[ltarg].outputs) )
+        return tf.add_n(reg_list)
+
+
+
+
     def get_weights( self, layer_target, ffnet_target=0, w_range=None, reshape=False ):
         """Return a matrix with the desired weights from the NDN. Can select subset of weights using
         w_range (default is return all), and can also reshape based on the filter dims (setting reshape=True)."""
@@ -1104,6 +1226,9 @@ class NDN(object):
         target.data_pipe_type = self.data_pipe_type
         target.batch_size = self.batch_size
         target.time_spread = self.time_spread
+
+        for nn in range(len(self.output_reg)):
+            target.output_reg.append(self.output_reg[nn].reg_copy())
 
         # Copy all the parameters
         for nn in range(self.num_networks):
@@ -1143,13 +1268,13 @@ class NDN(object):
 
         if self.noise_dist == 'gaussian':
             # In this case, LLnull is just var of data that exists
+            print( 'Warning: null-LL is not clearly useful for Gaussian noise distributions.' )
             if data_filters is None:
                 null_lls = np.var(robs, axis=0)
             else:
-                rbars = np.divide(np.multiply(data_filters, np.sum(robs, axis=0), np.sum(data_filters, axis=0)))
                 rbars = np.divide(np.sum(np.multiply(data_filters, robs), axis=0), 
-                                    np.maximum((np.sum(data_filters, axis=0), 1)))
-                rbars = np.divide(np.multiply(data_filters, np.sum(robs, axis=0)), np.sum(data_filters, axis=0)) # Correct IMHO
+                            np.maximum(np.sum(data_filters, axis=0), 1)  )
+                #rbars = np.divide(np.multiply(data_filters, np.sum(robs, axis=0)), np.sum(data_filters, axis=0)) # Correct IMHO
 
                 null_lls = np.divide(np.sum(np.square(np.add(robs, -rbars))), np.sum(data_filters, axis=0))
 
@@ -1734,7 +1859,7 @@ class NDN(object):
         best_cost = float('Inf')
         chkpted = False
 
-        if self.time_spread is not None:
+        if self.time_spread > 0:
             # get number of batches and their order for train indxs
             batch_order = np.arange(num_batches_tr)
 
@@ -1742,7 +1867,7 @@ class NDN(object):
         for epoch in range(epochs_training):
 
             # shuffle data before each pass
-            if self.time_spread is None:
+            if self.time_spread == 0:
                 train_indxs_perm = np.random.permutation(train_indxs)
             else:
                 batch_order_perm = np.random.permutation(batch_order)
@@ -1752,7 +1877,7 @@ class NDN(object):
 
                 if (self.data_pipe_type == 'data_as_var') or (self.data_pipe_type == 'feed_dict'):
                     # get training indices for this batch
-                    if self.time_spread is None:
+                    if self.time_spread == 0:
                         batch_indxs = train_indxs_perm[batch * opt_params['batch_size']:
                                                        (batch + 1) * opt_params['batch_size']]
                     else:
@@ -2524,7 +2649,7 @@ class NDN(object):
         import sys
         import dill
 
-        tmp_ndn = self.copy_model()
+        tmp_ndn = self.copy_model(self.tf_seed)
         sys.setrecursionlimit(10000)  # for dill calls to pickle
 
         if not os.path.isdir(os.path.dirname(save_file)):

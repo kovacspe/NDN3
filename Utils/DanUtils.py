@@ -18,7 +18,7 @@ def plot_norm( k, ksize = [36,20], cmap='gray', max_val=None):
         kr = k
     else:
         kr = np.reshape(k, ksize)
-    plt.imshow(kr, cmap=cmap, vmin=-max_val, vmax=max_val)
+    plt.imshow(kr, cmap=cmap, vmin=-max_val, vmax=max_val, aspect='auto')
 
 
 def subplot_setup(num_rows, num_cols, row_height=2):
@@ -245,7 +245,7 @@ def plot_3dfilters(ndnmod=None, filters=None, dims=None, plot_power=False, ffnet
         ax.set_xticks([])
         ax.set_yticks([])
         ax = plt.subplot(nrow, ncol, 2*nn+2)
-        plt.imshow(ksp, cmap='Greys', vmin=-np.max(abs(ks[:, nn])), vmax=np.max(abs(ks[:, nn])))
+        plt.imshow(ksp, interpolation='none', cmap='Greys', vmin=-np.max(abs(ks[:, nn])), vmax=np.max(abs(ks[:, nn])))
         plt.title('lag=' + str(bestlag))
         ax.set_xticks([])
         ax.set_yticks([])

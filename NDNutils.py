@@ -705,9 +705,10 @@ def spikes_to_robs(spks, num_time_pts, dt):
 
 
 def tent_basis_generate( xs=None, num_params=None, doubling_time=None, init_spacing=1, first_lag=0 ):
-    """Computes tent-bases over the range of 'xs', with center points at each value of 'xs'
+    """Computes tent-bases over the range of 'xs', with center points at each value of 'xs'.
     Alternatively (if xs=None), will generate a list with init_space and doubling_time up to
     the total number of parameters. Must specify xs OR num_params. 
+    Note this assumes discrete (binned) variables to be acted on.
     
     Defaults:
         doubling_time = num_params
@@ -748,6 +749,45 @@ def tent_basis_generate( xs=None, num_params=None, doubling_time=None, init_spac
             tent_basis[range(tbx[nn], tbx[nn+1]+1), nn] = 1-np.array(list(range(dx+1)))/dx
 
     return tent_basis
+
+
+def design_matrix_tent_basis( s, anchors, zero_left=False, zero_right=False):
+    """Produce a design matrix based on continuous data (s) and anchor points for a tent_basis.
+    Here s is a continuous variable (e.g., a stimulus) that is function of time -- single dimension --
+    and this will generate apply a tent basis set to s with a basis variable for each anchor point. 
+    The end anchor points will be one-sided, but these can be dropped by changing "zero_left" and/or
+    "zero_right" into "True".
+
+    Inputs: 
+        s: continuous one-dimensional variable with NT time points
+        anchors: list or array of anchor points for tent-basis set
+        zero_left, zero_right: boolean whether to drop the edge bases (default for both is False)
+    Outputs:
+        X: design matrix that will be NT x the number of anchors left after zeroing out left and right
+    """
+
+    if len(s.shape) > 1:
+        assert s.shape[1] == 1, 'Can only work on 1-d variables currently'
+        s = np.squeeze(s)
+
+    NT = len(s)
+    NA = len(anchors)
+    X = np.zeros([NT, NA])
+    for nn in range(NA):
+        if nn == 0:
+            #X[np.where(s < anchors[0])[0], 0] = 1
+            X[:, 0] = 1
+        else:
+            dx = anchors[nn]-anchors[nn-1]
+            X[:, nn] = np.minimum(np.maximum(np.divide( deepcopy(s)-anchors[nn-1], dx ), 0), 1)
+        if nn < NA-1:
+            dx = anchors[nn+1]-anchors[nn]
+            X[:, nn] *= np.maximum(np.minimum(np.divide(np.add(-deepcopy(s), anchors[nn+1]), dx), 1), 0)
+    if zero_left:
+        X = X[:,1:]
+    if zero_right:
+        X = X[:,:-1]
+    return X
 
 
 ######## GPU picking ########
