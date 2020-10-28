@@ -11,6 +11,8 @@ import shutil
 import numpy as np
 import tensorflow as tf
 
+from scipy import stats
+
 from .regularization import OutputRegularization
 from .ffnetwork import FFNetwork
 from .ffnetwork import SideNetwork
@@ -519,6 +521,7 @@ class NDN(object):
 
                     x_mean = tf.divide(tf.reduce_sum(x, axis=0), non_filtered_count)
                     y_mean = tf.divide(tf.reduce_sum(y, axis=0), non_filtered_count)
+                    x_std = tf.math.reduce_std(y, axis=0)
                     y_std = tf.math.reduce_std(y, axis=0)
 
                     # Filter out data-points that correspond to data_filters -> 0 diff from mean -> 0 contr. to corr
@@ -535,7 +538,7 @@ class NDN(object):
                     corr_per_neuron.set_shape([None]) # Fixes TF complaining about mask shapes
 
                     if filter_low_std:
-                        corr_per_neuron = tf.boolean_mask(corr_per_neuron,tf.greater(y_std, 1e-5))
+                        corr_per_neuron = tf.boolean_mask(corr_per_neuron,tf.math.logical_and(tf.greater(y_std, 1e-5),tf.greater(x_std, 1e-5)))
 
                     # Either filter out NaN neurons or replace them with 0 so that mean summary can be computed
                     if filter_NaNs:
@@ -553,6 +556,7 @@ class NDN(object):
                 # Something was actually filtered out -> log number of non-filtered out neurons
                 if self.log_correlation == 'filter-low-std-gold' or self.log_correlation == 'filter-NaNs':
                     tf.summary.scalar('correlation-non-filtered-out-neurons', tf.shape(self.correlation)[0])
+                
 
 
         self.cost = tf.add_n(cost)
