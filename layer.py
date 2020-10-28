@@ -3315,3 +3315,88 @@ class GridShifterLayer(Layer):
             
 
     # END GridSampleLayer.build_graph
+
+class SpatialXFeatureReadoutLayer(Layer):
+    def __init__(
+            self,
+            scope=None,
+            input_dims=None,  # this can be a list up to 3-dimensions
+            filter_dims=None,
+            output_dims=None,
+            activation_func='relu',
+            normalize_weights=0,
+            weights_initializer='normal',
+            biases_initializer='zeros',
+            reg_initializer=None,
+            num_inh=0,
+            pos_constraint=None,
+            log_activations=False):
+        """Constructor for SpatialXFeatureReadoutLayer class
+
+        Args:
+            scope (str): name scope for variables and operations in layer
+            input_dims (int or list of ints): dimensions of input data
+            n_neurons (int): number of neuron coordinates to remember. It will return (x,y) coordinates for each neuron
+        """
+        c, w, h = input_dims
+        self.num_weights = output_dims*(w*h + c)
+        super(SpatialXFeatureReadoutLayer, self).__init__(
+            scope=scope,
+            input_dims=(w*h + c),
+            filter_dims=filter_dims,
+            output_dims=output_dims,   # Note difference from layer
+            activation_func=activation_func,
+            normalize_weights=normalize_weights,
+            weights_initializer=weights_initializer,
+            biases_initializer=biases_initializer,
+            reg_initializer=reg_initializer,
+            num_inh=num_inh,
+            # note difference from layer (not anymore)
+            pos_constraint=pos_constraint,
+            log_activations=log_activations)
+        self.input_dims = input_dims
+        
+
+
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
+        with tf.name_scope(self.scope):
+            self._define_layer_variables()
+
+            c, w, h = self.input_dims
+            neurons = self.output_dims[0]
+
+            field = tf.reshape(
+                inputs, (-1, self.input_dims[2], self.input_dims[1], self.input_dims[0]))
+
+            weights = tf.reshape(self.weights_var,[-1])
+            if self.pos_constraint is not None:
+                w_p = tf.maximum(weights, 0.0)
+            else:
+                w_p = weights
+
+            if self.normalize_weights > 0:
+                if self.normalize_weights == 2:
+                    w_pn = tf.nn.l2_normalize(w_p) * self.num_filters
+                else:
+                    w_pn = tf.nn.l2_normalize(w_p, axis=0)
+            elif self.normalize_weights < 0:
+                w_pn = tf.divide(w_p, tf.maximum(tf.norm(w_p, axis=0), 1))
+            else:
+                w_pn = w_p
+
+            spatial_w, feature_w = tf.split(
+                w_p, [neurons*w*h, neurons*c], name='split_weights')
+            spatial_w = tf.reshape(spatial_w, (neurons, w, h))
+            feature_w = tf.reshape(feature_w, (neurons, c))
+            masked = tf.tensordot(
+                field, spatial_w, [[1, 2], [1, 2]], name='spatial_mask')
+            _pre = tf.reduce_sum(
+                masked * tf.transpose(feature_w), 1, name='lin_combination_over_features')
+
+            pre = tf.add(_pre, self.biases_var)
+
+            if self.ei_mask_var is None:
+                post = self._apply_act_func(pre)
+            else:
+                post = tf.multiply(self._apply_act_func(pre), self.ei_mask_var)
+            self.outputs = post
