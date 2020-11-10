@@ -164,6 +164,8 @@ class NDN(object):
         self.saver = None
         self.merge_summaries = None
         self.init = None
+
+        self.log_correlation = None
     # END NDN.__init__
 
     def _define_network(self):
@@ -448,6 +450,57 @@ class NDN(object):
                                 labels=data_out, logits=pred), axis=0))
             else:
                 TypeError('Cost function not supported.')
+
+        if self.log_correlation:
+                with tf.name_scope('correlation_comp'):
+
+                    filter_low_std = self.log_correlation == 'filter-low-std-gold'
+                    # If we want filter out low-std on gold, we (for sure) want to filter out NaNs as well
+                    filter_NaNs = self.log_correlation == 'filter-low-std-gold' or self.log_correlation == 'filter-NaNs'
+
+                    x = pred
+                    y = data_out
+                    y.set_shape(x.shape)
+
+                    non_filtered_count = tf.reduce_sum(data_filter_batch, axis=0)
+
+                    x_mean = tf.divide(tf.reduce_sum(x, axis=0), non_filtered_count)
+                    y_mean = tf.divide(tf.reduce_sum(y, axis=0), non_filtered_count)
+                    x_std = tf.math.reduce_std(y, axis=0)
+                    y_std = tf.math.reduce_std(y, axis=0)
+
+                    # Filter out data-points that correspond to data_filters -> 0 diff from mean -> 0 contr. to corr
+                    x_mean_d = tf.where(data_filter_batch > 0, (x-x_mean), tf.zeros_like(x))
+                    y_mean_d = tf.where(data_filter_batch > 0, (y-y_mean), tf.zeros_like(y))
+
+                    # Compute correlation
+                    corr_per_neuron = tf.divide(
+                            tf.reduce_sum(tf.multiply(x_mean_d, y_mean_d), axis=0)
+                        ,
+                            tf.sqrt(tf.reduce_sum(x_mean_d**2, axis=0))*
+                            tf.sqrt(tf.reduce_sum(y_mean_d**2, axis=0))
+                        )
+                    corr_per_neuron.set_shape([None]) # Fixes TF complaining about mask shapes
+
+                    if filter_low_std:
+                        corr_per_neuron = tf.boolean_mask(corr_per_neuron,tf.math.logical_and(tf.greater(y_std, 1e-5),tf.greater(x_std, 1e-5)))
+
+                    # Either filter out NaN neurons or replace them with 0 so that mean summary can be computed
+                    if filter_NaNs:
+                        corr_no_nans = tf.boolean_mask(corr_per_neuron, tf.is_finite(corr_per_neuron))
+                    else:
+                        corr_no_nans = tf.where(tf.is_finite(corr_per_neuron), corr_per_neuron, tf.zeros_like(corr_per_neuron))
+
+                    unit_corr.append(corr_no_nans)
+
+        if self.log_correlation:
+            with tf.name_scope('correlation'): # https://stackoverflow.com/questions/45670224/why-the-tf-name-scope-with-same-name-is-different
+                self.correlation = tf.divide(tf.add_n(unit_corr), len(unit_corr))
+
+                tf.summary.scalar('correlation', tf.reduce_mean(self.correlation))
+                # Something was actually filtered out -> log number of non-filtered out neurons
+                if self.log_correlation == 'filter-low-std-gold' or self.log_correlation == 'filter-NaNs':
+                    tf.summary.scalar('correlation-non-filtered-out-neurons', tf.shape(self.correlation)[0])
 
         self.cost = tf.add_n(cost)
         self.unit_cost = unit_cost # this is not yet normalized
