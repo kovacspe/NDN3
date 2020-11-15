@@ -3115,3 +3115,61 @@ class HadiReadoutLayer(Layer):
             tf.summary.histogram('act_pre', pre)
             tf.summary.histogram('act_post', post)
     # END ConvReadoutLayer.build_graph
+
+
+class VariableLayer(Layer):
+    def __init__(self, 
+        scope=None, 
+        input_dims=None, 
+        output_dims=None, 
+        activation_func='relu', 
+        normalize_weights=0, 
+        weights_initializer='normal', 
+        biases_initializer='zeros', 
+        reg_initializer=None, 
+        num_inh=0, 
+        pos_constraint=None, 
+        log_activations=False):
+
+        super().__init__(scope=scope, 
+            input_dims=1, 
+            output_dims=output_dims, 
+            activation_func=activation_func, 
+            normalize_weights=normalize_weights, 
+            weights_initializer=weights_initializer, 
+            biases_initializer=biases_initializer, 
+            reg_initializer=reg_initializer, 
+            num_inh=num_inh, 
+            pos_constraint=pos_constraint, 
+            log_activations=log_activations)
+
+    def _define_layer_variables(self):
+        # Define tensor-flow versions of variables (placeholder and variables)
+        super()._define_layer_variables()
+        with tf.name_scope('weights_init'):
+            self.weights_ph = tf.placeholder_with_default(
+                self.weights,
+                shape=self.weights.shape,
+                name='weights_ph')
+            self.weights_var = tf.Variable(
+                self.weights_ph,
+                dtype=tf.float32,
+                name='weights_var', 
+                constraint=lambda z: tf.clip_by_value(z, -1, 1))
+
+
+        # Check for need of ei_mask
+        if np.sum(self.ei_mask) < len(self.ei_mask):
+            self.ei_mask_var = tf.constant(
+                self.ei_mask, dtype=tf.float32, name='ei_mask')
+        else:
+            self.ei_mask_var = None
+    # END Layer._define_layer_variables
+
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
+        with tf.name_scope(self.scope):
+            self._define_layer_variables()
+            if 'as_var' in params_dict:
+                self.outputs = self.weights_var
+            else:
+                self.outputs = tf.identity(inputs)
