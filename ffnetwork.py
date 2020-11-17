@@ -580,9 +580,7 @@ class FFNetwork(object):
                     log_activations=network_params['log_activations']))
 
             elif self.layer_types[nn] == 'var':
-                print(f'var layer inp: {layer_sizes[nn]} out: {layer_sizes[nn+1]}')
                 layer_sizes[nn+1] = layer_sizes[nn]
-                print(f'var layer inp: {layer_sizes[nn]} out: {layer_sizes[nn+1]}')
                 self.layers.append(VariableLayer(
                     scope='var_layer_%i' % nn,
                     input_dims=layer_sizes[nn],
@@ -598,6 +596,7 @@ class FFNetwork(object):
                 # Modify output size to take into account shifts
                 #if nn < self.num_layers:
                 #    layer_sizes[nn+1] = self.layers[nn].output_dims.copy()
+
             else:
                 raise TypeError('Layer type %i not defined.' % nn)
     # END FFNetwork._define_network
