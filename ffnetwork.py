@@ -579,6 +579,22 @@ class FFNetwork(object):
                     pos_constraint=network_params['pos_constraints'][nn],
                     log_activations=network_params['log_activations']))
 
+            elif self.layer_types[nn] == 'var':
+                print(f'var layer inp: {layer_sizes[nn]} out: {layer_sizes[nn+1]}')
+                layer_sizes[nn+1] = layer_sizes[nn]
+                print(f'var layer inp: {layer_sizes[nn]} out: {layer_sizes[nn+1]}')
+                self.layers.append(VariableLayer(
+                    scope='var_layer_%i' % nn,
+                    input_dims=layer_sizes[nn],
+                    output_dims=layer_sizes[nn+1],
+                    activation_func=network_params['activation_funcs'][nn],
+                    normalize_weights=network_params['normalize_weights'][nn],
+                    weights_initializer=network_params['weights_initializers'][nn],
+                    biases_initializer=network_params['biases_initializers'][nn],
+                    reg_initializer=network_params['reg_initializers'][nn],
+                    num_inh=network_params['num_inh'][nn],
+                    pos_constraint=network_params['pos_constraints'][nn],
+                    log_activations=network_params['log_activations']))
                 # Modify output size to take into account shifts
                 #if nn < self.num_layers:
                 #    layer_sizes[nn+1] = self.layers[nn].output_dims.copy()

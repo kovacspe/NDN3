@@ -450,6 +450,10 @@ class NDN(object):
                     unit_cost.append(tf.reduce_sum(
                             tf.nn.sigmoid_cross_entropy_with_logits(
                                 labels=data_out, logits=pred), axis=0))
+            elif self.noise_dist == 'max':
+                with tf.name_scope('max_activation_loss'):
+                    cost.append(-tf.reduce_sum(pred))
+                    unit_cost.append(-tf.reduce_sum(pred,axis=0))
             else:
                 TypeError('Cost function not supported.')
 
