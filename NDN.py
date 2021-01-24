@@ -207,7 +207,7 @@ class NDN(object):
                     self.network_list[nn]['input_dims'] = input_dims_measured
                 # print('network %i:' % nn, input_dims_measured)
             else:
-                # print('network %i:' % nn, network_list[nn]['input_dims'], input_dims_measured )
+                print('network %i:' % nn, self.network_list[nn]['input_dims'], input_dims_measured )
                 assert self.network_list[nn]['input_dims'] == \
                        list(input_dims_measured), 'Input_dims dont match. network '+str(nn)
 

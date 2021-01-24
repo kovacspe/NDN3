@@ -593,12 +593,64 @@ class FFNetwork(object):
                     num_inh=network_params['num_inh'][nn],
                     pos_constraint=network_params['pos_constraints'][nn],
                     log_activations=network_params['log_activations']))
-                # Modify output size to take into account shifts
-                #if nn < self.num_layers:
-                #    layer_sizes[nn+1] = self.layers[nn].output_dims.copy()
+
+            elif self.layer_types[nn] == 'biasreg':
+                if 'bias_reg_initializers' in network_params:
+                    if isinstance(network_params['bias_reg_initializers'],list):
+                        bias_reg = network_params['bias_reg_initializers'][nn]
+                    else:
+                        bias_reg = network_params['bias_reg_initializers']
+                else:
+                    bias_reg = {}
+                self.layers.append(BiasRegLayer(
+                    scope='biasreg_layer_%i' % nn,
+                    input_dims=layer_sizes[nn],
+                    output_dims=layer_sizes[nn+1],
+                    activation_func=network_params['activation_funcs'][nn],
+                    normalize_weights=network_params['normalize_weights'][nn],
+                    weights_initializer=network_params['weights_initializers'][nn],
+                    biases_initializer=network_params['biases_initializers'][nn],
+                    reg_initializer=network_params['reg_initializers'][nn],
+                    bias_reg_initializer=bias_reg,
+                    normalize_output=network_params['normalize_output'][nn],
+                    num_inh=network_params['num_inh'][nn],
+                    pos_constraint=network_params['pos_constraints'][nn],
+                    log_activations=network_params['log_activations']))
+
+            elif self.layer_types[nn] == 'deconv':
+
+                if network_params['conv_filter_widths'][nn] is None:
+                    conv_filter_size = layer_sizes[nn]
+                else:
+                    if len(layer_sizes[nn]) > 3:
+                        dim0size = layer_sizes[nn][0]*np.prod(layer_sizes[nn][3:])
+                    else:
+                        dim0size = layer_sizes[nn][0]
+
+                    conv_filter_size = [dim0size, network_params['conv_filter_widths'][nn], 1]
+                    if layer_sizes[nn][2] > 1:
+                        conv_filter_size[2] = network_params['conv_filter_widths'][nn]
+                
+                self.layers.append(DeconvLayer(
+                    scope='deconv_layer_%i' % nn,
+                    input_dims=layer_sizes[nn],
+                    num_filters=layer_sizes[nn+1],
+                    filter_dims=conv_filter_size,
+                    shift_spacing=network_params['shift_spacing'][nn],
+                    output_shape=network_params['output_shape'][nn],
+                    activation_func=network_params['activation_funcs'][nn],
+                    normalize_weights=network_params['normalize_weights'][nn],
+                    weights_initializer=network_params['weights_initializers'][nn],
+                    biases_initializer=network_params['biases_initializers'][nn],
+                    reg_initializer=network_params['reg_initializers'][nn],
+                    num_inh=network_params['num_inh'][nn],
+                    normalize_output=network_params['normalize_output'][nn],
+                    pos_constraint=network_params['pos_constraints'][nn],
+                    log_activations=network_params['log_activations']))
 
             else:
                 raise TypeError('Layer type %i not defined.' % nn)
+            print(f'layer {nn}: ',self.layers[-1].output_dims)
     # END FFNetwork._define_network
 
     def build_fit_variable_list(self, fit_parameter_list):
