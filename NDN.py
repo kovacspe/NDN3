@@ -450,10 +450,16 @@ class NDN(object):
                     unit_cost.append(tf.reduce_sum(
                             tf.nn.sigmoid_cross_entropy_with_logits(
                                 labels=data_out, logits=pred), axis=0))
+
             elif self.noise_dist == 'max':
                 with tf.name_scope('max_activation_loss'):
                     cost.append(-tf.reduce_sum(pred))
                     unit_cost.append(-tf.reduce_sum(pred,axis=0))
+            elif self.noise_dist == 'oneside-gaussian':
+                with tf.name_scope('oneside_gaussian_loss'):
+                    cost.append(tf.nn.l2_loss(tf.math.maximum(0.0,data_out - pred)) / nt * 2)  # x2: l2_loss gives half the norm (!)
+                    unit_cost.append(tf.reduce_sum(tf.square(tf.math.maximum(0.0,data_out - pred)), axis=0)) # unnormalized
+
             else:
                 TypeError('Cost function not supported.')
 
