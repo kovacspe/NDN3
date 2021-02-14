@@ -332,7 +332,7 @@ class FFNetwork(object):
                     pos_constraint=network_params['pos_constraints'][nn],
                     log_activations=network_params['log_activations']))
 
-            elif self.layer_types[nn] == 'conv':
+            elif self.layer_types[nn] == 'conv' or self.layer_types[nn] == 'conv_diff_of_gaussians':
 
                 if network_params['conv_filter_widths'][nn] is None:
                     conv_filter_size = layer_sizes[nn]
@@ -360,6 +360,19 @@ class FFNetwork(object):
                         reg_initializer=network_params['reg_initializers'][nn],
                         num_inh=network_params['num_inh'][nn],
                         pos_constraint=network_params['pos_constraints'][nn],
+                        log_activations=network_params['log_activations']))
+                elif self.layer_types[nn] == 'conv_diff_of_gaussians':
+                    self.layers.append(ConvDiffOfGaussiansLayer(
+                        scope='conv_dog_layer_%i' % nn,
+                        input_dims=layer_sizes[nn],
+                        num_filters=layer_sizes[nn+1],
+                        bounds=network_params['bounds'][nn] if 'bounds' in network_params else None,
+                        filter_dims=conv_filter_size,
+                        shift_spacing=network_params['shift_spacing'][nn],
+                        activation_func=network_params['activation_funcs'][nn],
+                        weights_initializer=network_params['weights_initializers'][nn],
+                        biases_initializer=network_params['biases_initializers'][nn],
+                        num_inh=network_params['num_inh'][nn],
                         log_activations=network_params['log_activations']))
 
                 # Modify output size to take into account shifts

@@ -718,7 +718,7 @@ class DiffOfGaussiansLayer(Layer):
             zero_eps = np.finfo(float).eps
             bounds = [
                 (zero_eps, 10),                 # alpha
-                (1, 25),                        # sigma
+                (1, max(int(0.82*self.filter_dims[1]), int(0.82*self.filter_dims[2]))),                        # sigma ~ bounds in the original paper
                 (2, self.input_dims[1] - 2),    # ux
                 (2, self.input_dims[2] - 2)     # uy
                 ]
@@ -729,10 +729,10 @@ class DiffOfGaussiansLayer(Layer):
         self.bounds_y = bounds[3]
 
         if weights_initializer == 'random':
-            self.weights = np.array(self.__get_random_w(num_filters) + self.__get_random_w(num_filters), np.float32)
+            self.weights = np.array(self.get_random_w(num_filters) + self.get_random_w(num_filters), np.float32)
     # END DiffOfGaussiansLayer.__init__
 
-    def __get_random_w(self, num_filters):
+    def get_random_w(self, num_filters):
         def get_random_for_bounds(bounds):
             return bounds[0] + (bounds[1] - bounds[0])*np.random.sample()
 
@@ -764,7 +764,7 @@ class DiffOfGaussiansLayer(Layer):
     def __get_gaussian(self, X, Y, alpha, sigma, ux, uy):
         return (alpha) * (tf.exp(-((X - ux) ** 2 + (Y - uy) ** 2) / 2 / sigma) / (2*sigma*np.pi))   # implementation is slightly different than paper (not sigma^2)
 
-    def __get_DoG(self, weights, W, H, num_filters):
+    def get_DoG(self, weights, W, H, num_filters):
         (alpha1, sigma1, ux1, uy1) = self.__get_weights_clipped(weights, num_filters, 0)
         (alpha2, sigma2, ux2, uy2) = self.__get_weights_clipped(weights, num_filters, 1)
 
@@ -806,8 +806,8 @@ class DiffOfGaussiansLayer(Layer):
             num_filters = self.output_dims[0]
             weights = tf.reshape(self.weights_var, [8, num_filters])
             
-            gm_np = self.__get_DoG(weights, W, H, num_filters)
-            gm = tf.expand_dims(gm_np, 2) # W, H, 1, num_filters
+            gm_np = self.get_DoG(weights, W, H, num_filters)
+            gm = tf.expand_dims(gm_np, 2) # H, W, 1, num_filters
 
             gaussed = tf.multiply(shaped_input, gm)
 
@@ -823,6 +823,195 @@ class DiffOfGaussiansLayer(Layer):
                                             noise_shape=[1, 1, 1, self.num_filters])
             self.outputs = post_drpd
             
+        if self.log:
+            tf.summary.histogram('act_pre', pre)
+            tf.summary.histogram('act_post', post)
+    # END DiffOfGaussiansLayer.build_graph
+
+class ConvDiffOfGaussiansLayer(DiffOfGaussiansLayer):
+    """Implementation of a convolutional variant of difference of gaussians layer
+       based on: https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1004927
+    """
+
+    def __init__(
+            self,
+            scope=None,
+            input_dims=None,   # this can be a list up to 3-dimensions
+            num_filters=None,
+            filter_dims=None,  # this can be a list up to 3-dimensions
+            shift_spacing=1,
+            dilation=1,
+            bounds=None,
+            activation_func='relu',
+            weights_initializer='normal',
+            biases_initializer='zeros',
+            num_inh=0,
+            log_activations=False):
+        """Constructor for DiffOfGaussiansLayer class
+
+        Args:
+            scope (str): name scope for variables and operations in layer
+            input_dims (int or list of ints): dimensions of input data
+            num_filters (int): number of independent gaussian filters
+            filter_dims (int or list of ints): dimensions of the filters
+            shift_spacing (int): stride of convolution operation
+            bounds ([(float, float),(float, float),(float, float),(float, float)]): bounds 
+                (lower,upper) for alpha, sigma, ux, uy weights of DoG filter.
+            activation_func (str, optional): pointwise function applied to  
+                output of affine transformation
+                ['relu'] | 'sigmoid' | 'tanh' | 'identity' | 'softplus' | 
+                'elu' | 'quad'
+            normalize_weights (int): 1 to normalize weights, -1 to have maxnorm,  0 otherwise
+                [0] | 1, -1
+            weights_initializer (str, optional): initializer for the weights
+                'random' | 'zeros'
+            biases_initializer (str, optional): initializer for the biases
+                'trunc_normal' | 'normal' | ['zeros']
+            reg_initializer (dict, optional): see Regularizer docs for info
+            num_inh (int, optional): number of inhibitory units in layer
+            pos_constraint (None, valued): True to constrain layer weights to
+                be positive
+            log_activations (bool, optional): True to use tf.summary on layer 
+                activations
+
+        Raises:
+            ValueError: If `pos_constraint` is `True`
+        
+        Notes:
+            Weights are `[alpha, sigma, ux, uy]` twice (for first and second gaussian).
+                Each one (e.g. alpha, ...) is a vector of shape (num_filters).          
+            self.impl_concentric: If true (by default) the first's (Gauss1) ux, uy weights are 
+                reused for the second gaussian (Gauss2) as well (DoG == Gauss1 - Gauss2)
+            self.impl_sigma: If true (by default) the second's (Gauss2) actual sigma is 
+                a summation of sigma1 and sigma2 (i.e. Gauss2 has always >= sigma than Gauss1)
+        """
+
+        # Process stim and filter dimensions
+        # (potentially both passed in as num_inputs list)
+        if isinstance(input_dims, list):
+            while len(input_dims) < 3:
+                input_dims.append(1)
+        else:
+            # assume 1-dimensional (space)
+            input_dims = [1, input_dims, 1]
+
+        # If output dimensions already established, just strip out num_filters
+        if isinstance(num_filters, list):
+            num_filters = num_filters[0]
+
+        # Calculate number of shifts (for output)
+        num_shifts = [1, 1]
+        if input_dims[1] > 1:
+            num_shifts[0] = int(np.ceil(input_dims[1]/shift_spacing))
+        if input_dims[2] > 1:
+            num_shifts[1] = int(np.ceil(input_dims[2]/shift_spacing))
+
+        # Only random (with input-size bounds) or zero initializations are available for parameters this layer
+        if not weights_initializer in ['zeros', 'random']:
+            raise ValueError('Invalid weights_initializer ''%s''' %weights_initializer)
+
+        super(DiffOfGaussiansLayer, self).__init__(
+                scope=scope,
+                input_dims=8,   # Hack to initialize size of weights to the number of this layer's parameters
+                filter_dims=filter_dims,
+                output_dims= num_filters,   
+                activation_func=activation_func,
+                normalize_weights=0,
+                weights_initializer='zeros',
+                biases_initializer=biases_initializer,
+                reg_initializer=None,
+                num_inh=num_inh,
+                pos_constraint=None,
+                log_activations=log_activations)
+      
+        self.input_dims = input_dims
+
+        # ConvLayer-specific properties
+        self.shift_spacing = shift_spacing
+        self.num_shifts = num_shifts
+        self.dilation = dilation
+        # Changes in properties from Layer - note this is implicitly multi-dimensional
+        self.output_dims = [num_filters] + num_shifts[:]
+
+        # DoG specific properties
+        self.impl_concentric = True
+        self.impl_sigma = True
+
+        # Set bounds for variables:
+        # - Alpha is always positive
+        # - Sigma is positive and smaller than the size of the image 
+        # - Centers (ux, uy) within image
+        if bounds is None:
+            zero_eps = np.finfo(float).eps
+            bounds = [
+                (zero_eps, 10),                 # alpha
+                (1, max(int(0.82*self.filter_dims[1]), int(0.82*self.filter_dims[2]))),                        # sigma ~ bounds in the original paper
+                (2, self.filter_dims[1] - 2),    # ux
+                (2, self.filter_dims[2] - 2)     # uy
+                ]
+        
+        self.bounds_alpha = bounds[0]
+        self.bounds_sigma = bounds[1]
+        self.bounds_x = bounds[2]
+        self.bounds_y = bounds[3]
+
+        if weights_initializer == 'random':
+            self.weights = np.array(self.get_random_w(num_filters) + self.get_random_w(num_filters), np.float32)
+    # END DiffOfGaussiansLayer.__init__
+
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
+
+        assert params_dict is not None, 'Incorrect ConvLayer initialization.'
+        # Unfold siLayer-specific parameters for building graph
+
+        with tf.name_scope(self.scope):
+            self._define_layer_variables()
+
+            # Reshape of inputs (4-D):
+            input_dims = [-1, self.input_dims[2], self.input_dims[1],
+                          self.input_dims[0]]
+            # this is reverse-order from Matlab:
+            # [space-2, space-1, lags, and num_examples]
+            shaped_input = tf.reshape(inputs, input_dims)
+
+            # Prepare index meshgrid
+            W = np.array(range(self.filter_dims[1]))
+            H = np.array(range(self.filter_dims[2]))
+
+            num_filters = self.output_dims[0]
+            weights = tf.reshape(self.weights_var, [8, num_filters])
+            
+            gm_np = self.get_DoG(weights, W, H, num_filters)
+            gm = tf.expand_dims(gm_np, 2) # H, W, 1, num_filters
+
+            # Reshape weights (4:D: [filter_height, filter_width, in_channels, out_channels])
+            conv_filter_dims = [self.filter_dims[2], self.filter_dims[1], self.filter_dims[0],
+                                self.num_filters]
+            ws_conv = tf.broadcast_to(gm, conv_filter_dims)
+
+
+            strides, dilation = [1, 1, 1, 1], [1, 1, 1, 1]
+            if conv_filter_dims[0] > 1:             # Assumes data_format: NHWC
+                strides[1] = self.shift_spacing
+                dilation[1] = self.dilation
+            if conv_filter_dims[1] > 1:
+                strides[2] = self.shift_spacing
+                dilation[2] = self.dilation
+
+
+            _pre = tf.nn.conv2d(shaped_input, ws_conv, strides=strides, dilations=dilation, padding='SAME')
+            pre = tf.add(_pre, self.biases_var)
+
+            if self.ei_mask_var is None:
+                post = self._apply_act_func(pre)
+            else:
+                post = tf.multiply(self._apply_act_func(pre), self.ei_mask_var)
+
+            post_drpd = self._apply_dropout(post, use_dropout=use_dropout,
+                                            noise_shape=[1, 1, 1, self.num_filters])
+            self.outputs = tf.reshape(
+                post_drpd, [-1, self.num_filters * self.num_shifts[0] * self.num_shifts[1]])
+
         if self.log:
             tf.summary.histogram('act_pre', pre)
             tf.summary.histogram('act_post', post)
