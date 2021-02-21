@@ -3605,4 +3605,10 @@ class DeconvLayer(Layer):
         if self.log:
             tf.summary.histogram('act_pre', pre)
             tf.summary.histogram('act_post', post)
-    # END ConvLayer.build_graph
+    
+
+    def copy_layer_params(self, origin_layer):
+        super().copy_layer_params(origin_layer)
+        self.normalize_output = deepcopy(origin_layer.normalize_output)
+
+    # END DeconvLayer.build_graph
