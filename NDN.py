@@ -383,6 +383,10 @@ class NDN(object):
         unit_cost = []
         unit_corr = []
         for nn in range(len(self.ffnet_out)):
+            if isinstance(self.noise_dist,list):
+                noise_dist = self.noise_dist[nn]
+            else:
+                noise_dist = self.noise_dist
             time_spread = self.time_spread
             #data_out = tf.slice(self.data_out_batch[nn], [self.time_spread, 0], [-1, -1])
 
@@ -410,7 +414,7 @@ class NDN(object):
             nt = tf.cast(tf.shape(pred)[0], tf.float32)  # already sliced 
 
             # define cost function
-            if self.noise_dist == 'gaussian':
+            if noise_dist == 'gaussian':
                 with tf.name_scope('gaussian_loss'):
                     cost.append(tf.nn.l2_loss(data_out - pred) / nt * 2)  # x2: l2_loss gives half the norm (!)
                     #unit_cost.append(tf.reduce_mean(tf.square(data_out-pred), axis=0))
@@ -419,7 +423,7 @@ class NDN(object):
                     # cost.append(tf.nn.l2_loss(data_out[time_spread:, :] - pred) / nt * 2)
                     # unit_cost.append(tf.reduce_mean(tf.square(data_out[time_spread:, :]-pred), axis=0))
 
-            elif self.noise_dist == 'poisson':
+            elif noise_dist == 'poisson':
                 with tf.name_scope('poisson_loss'):
 
                     if self.poisson_unit_norm is not None:
@@ -438,7 +442,7 @@ class NDN(object):
                         tf.multiply(data_out, tf.log(self._log_min + pred)) - pred,
                         axis=0))
 
-            elif self.noise_dist == 'bernoulli':
+            elif noise_dist == 'bernoulli':
                 with tf.name_scope('bernoulli_loss'):
                     # Check per-cell normalization with cross-entropy
                     # cost_norm = tf.maximum(
@@ -451,11 +455,11 @@ class NDN(object):
                             tf.nn.sigmoid_cross_entropy_with_logits(
                                 labels=data_out, logits=pred), axis=0))
 
-            elif self.noise_dist == 'max':
+            elif noise_dist == 'max':
                 with tf.name_scope('max_activation_loss'):
                     cost.append(-tf.reduce_sum(pred))
                     unit_cost.append(-tf.reduce_sum(pred,axis=0))
-            elif self.noise_dist == 'oneside-gaussian':
+            elif noise_dist == 'oneside-gaussian':
                 with tf.name_scope('oneside_gaussian_loss'):
                     cost.append(tf.nn.l2_loss(tf.math.maximum(0.0,data_out - pred)) / nt * 2)  # x2: l2_loss gives half the norm (!)
                     unit_cost.append(tf.reduce_sum(tf.square(tf.math.maximum(0.0,data_out - pred)), axis=0)) # unnormalized
@@ -505,7 +509,6 @@ class NDN(object):
 
                     unit_corr.append(corr_no_nans)
 
-            if self.log_correlation:
                 with tf.name_scope('correlation'): # https://stackoverflow.com/questions/45670224/why-the-tf-name-scope-with-same-name-is-different
                     self.correlation = tf.divide(tf.add_n(unit_corr), len(unit_corr))
 
@@ -1358,7 +1361,7 @@ class NDN(object):
                 self.data_filter_ph = [None] * len(self.output_sizes)
                 self.data_filter_var = [None] * len(self.output_sizes)
                 self.data_filter_batch = [None] * len(self.output_sizes)
-                for ii, output_size in enumerate(self.output_sizes):
+                for i, output_size in enumerate(self.output_sizes):
                     # placeholders for data
                     self.data_filter_ph[i] = tf.placeholder(
                         dtype=tf.float32,
