@@ -3317,7 +3317,8 @@ class VariableLayer(Layer):
         biases_initializer='zeros', 
         reg_initializer=None, 
         num_inh=0, 
-        pos_constraint=None, 
+        pos_constraint=None,
+        normalize_output=None,
         log_activations=False):
 
         super().__init__(scope=scope, 
@@ -3353,6 +3354,7 @@ class VariableLayer(Layer):
                 self.ei_mask, dtype=tf.float32, name='ei_mask')
         else:
             self.ei_mask_var = None
+        self.normalize_output = normalize_output
     # END Layer._define_layer_variables
 
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
@@ -3362,6 +3364,13 @@ class VariableLayer(Layer):
                 self.outputs = self.weights_var
             else:
                 self.outputs = tf.identity(inputs)
+
+            if self.normalize_output:
+                self.outputs = np.sqrt(self.normalize_output)*tf.nn.l2_normalize(self.outputs,axis=1)
+
+    def copy_layer_params(self, origin_layer):
+        super().copy_layer_params(origin_layer)
+        self.normalize_output = deepcopy(origin_layer.normalize_output)
 
 
 class BiasRegLayer(Layer):
@@ -3584,7 +3593,6 @@ class DeconvLayer(Layer):
                 strides[2] = self.shift_spacing
             output_shape = [tf.shape(shaped_input)[0], self.output_dims[2],self.output_dims[1],self.output_dims[0]]
             _pre = tf.nn.conv2d_transpose(shaped_input, ws_conv,output_shape=output_shape, strides=strides, padding='SAME')
-            print('Deconvolved',_pre.shape)
             pre = tf.add(_pre, self.biases_var)
 
             if self.ei_mask_var is None:

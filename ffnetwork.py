@@ -594,6 +594,9 @@ class FFNetwork(object):
 
             elif self.layer_types[nn] == 'var':
                 layer_sizes[nn+1] = layer_sizes[nn]
+                norm_output = None
+                if 'normalize_output' in network_params:
+                    norm_output = network_params['normalize_output'][nn]
                 self.layers.append(VariableLayer(
                     scope='var_layer_%i' % nn,
                     input_dims=layer_sizes[nn],
@@ -605,6 +608,7 @@ class FFNetwork(object):
                     reg_initializer=network_params['reg_initializers'][nn],
                     num_inh=network_params['num_inh'][nn],
                     pos_constraint=network_params['pos_constraints'][nn],
+                    normalize_output=norm_output,
                     log_activations=network_params['log_activations']))
 
             elif self.layer_types[nn] == 'biasreg':
