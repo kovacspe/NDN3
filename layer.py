@@ -3332,6 +3332,7 @@ class VariableLayer(Layer):
             num_inh=num_inh, 
             pos_constraint=pos_constraint, 
             log_activations=log_activations)
+        self.normalize_output = normalize_output
 
     def _define_layer_variables(self):
         # Define tensor-flow versions of variables (placeholder and variables)
@@ -3354,7 +3355,7 @@ class VariableLayer(Layer):
                 self.ei_mask, dtype=tf.float32, name='ei_mask')
         else:
             self.ei_mask_var = None
-        self.normalize_output = normalize_output
+        
     # END Layer._define_layer_variables
 
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
