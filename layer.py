@@ -3346,9 +3346,14 @@ class VariableLayer(Layer):
                 self.weights_ph,
                 dtype=tf.float32,
                 name='weights_var', 
-                constraint=lambda z: tf.clip_by_value(z, -1.75, 1.75))
+                # constraint=lambda z: tf.clip_by_value(z, -1.75, 1.75)
+                )
 
-
+        self.gaussian_blur_std_var = tf.Variable(
+            1.0,
+            dtype=tf.float32,
+            name='gaussian_blur_std_var'
+        )
         # Check for need of ei_mask
         if np.sum(self.ei_mask) < len(self.ei_mask):
             self.ei_mask_var = tf.constant(
@@ -3357,6 +3362,13 @@ class VariableLayer(Layer):
             self.ei_mask_var = None
         
     # END Layer._define_layer_variables
+    def gaussian_kernel(self, size, mean, std):
+        """Makes 2D gaussian Kernel for convolution."""
+        d = tf.distributions.Normal(mean, std)
+        vals = d.prob(tf.range(start = -size, limit = size + 1, dtype = tf.float32))
+        gauss_kernel = tf.einsum('i,j->ij',vals,vals)
+        kernel_2d = gauss_kernel / tf.reduce_sum(gauss_kernel)
+        return kernel_2d[:, :, tf.newaxis, tf.newaxis]
 
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
         with tf.name_scope(self.scope):
@@ -3368,6 +3380,14 @@ class VariableLayer(Layer):
 
             if self.normalize_output:
                 self.outputs = np.sqrt(self.normalize_output)*tf.nn.l2_normalize(self.outputs,axis=1)
+            
+            blurred = tf.nn.conv2d(
+                self.weights_var[tf.newaxis,:,:,tf.newaxis], 
+                self.gaussian_kernel(5,0.0,self.gaussian_blur_std_var), 
+                [1,1,1,1], 
+                'SAME'
+            )
+            self.gaussian_blur = self.weights_var.assign(tf.reshape(blurred,tf.shape(blurred)[1:3]))
 
     def copy_layer_params(self, origin_layer):
         super().copy_layer_params(origin_layer)
