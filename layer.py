@@ -3533,10 +3533,7 @@ class DeconvLayer(Layer):
             else:
                 filter_dims = [filter_dims, 1, 1]
 
-        # if nlags is not None:
-        #    filter_dims[0] *= nlags
 
-        # If output dimensions already established, just strip out num_filters
         if isinstance(num_filters, list):
             num_filters = num_filters[0]
 
@@ -3558,7 +3555,7 @@ class DeconvLayer(Layer):
                 biases_initializer=biases_initializer,
                 reg_initializer=reg_initializer,
                 num_inh=num_inh,
-                pos_constraint=pos_constraint,  # note difference from layer (not anymore)
+                pos_constraint=pos_constraint,
                 log_activations=log_activations)
 
         # ConvLayer-specific properties
@@ -3576,16 +3573,12 @@ class DeconvLayer(Layer):
     def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
 
         assert params_dict is not None, 'Incorrect DeconvLayer initialization.'
-        # Unfold siLayer-specific parameters for building graph
 
         with tf.name_scope(self.scope):
             self._define_layer_variables()
 
-            # Reshape of inputs (4-D):
             input_dims = [-1, self.input_dims[2], self.input_dims[1],
                           self.input_dims[0]]
-            # this is reverse-order from Matlab:
-            # [space-2, space-1, lags, and num_examples]
             shaped_input = tf.reshape(inputs, input_dims)
 
             # Reshape weights (4:D: [filter_height, filter_width, in_channels, out_channels])
@@ -3606,7 +3599,6 @@ class DeconvLayer(Layer):
 
             ws_conv = tf.reshape(w_pn, conv_filter_dims)
 
-            # Make strides and dilation lists, 2D lists were failing on TF:12.0.2 for some reason
             strides = [1, 1, 1, 1]
             if conv_filter_dims[0] > 1:             # Assumes data_format: NHWC
                 strides[1] = self.shift_spacing
@@ -3641,3 +3633,67 @@ class DeconvLayer(Layer):
         self.normalize_output = deepcopy(origin_layer.normalize_output)
 
     # END DeconvLayer.build_graph
+
+class MaskLayer(Layer):
+    def __init__(self, 
+        scope=None, 
+        input_dims=None, 
+        output_dims=None, 
+        activation_func='relu', 
+        normalize_weights=0, 
+        weights_initializer='ones', 
+        biases_initializer='zeros', 
+        reg_initializer=None, 
+        num_inh=0, 
+        pos_constraint=None,
+        normalize_output=None,
+        log_activations=False):
+
+        super().__init__(scope=scope, 
+            input_dims=input_dims, 
+            output_dims=output_dims, 
+            activation_func=activation_func, 
+            normalize_weights=normalize_weights, 
+            weights_initializer=weights_initializer, 
+            biases_initializer=biases_initializer, 
+            reg_initializer=reg_initializer, 
+            num_inh=num_inh, 
+            pos_constraint=pos_constraint, 
+            log_activations=log_activations)
+        self.output_shape = input_dims
+        self.output_dims = input_dims
+        self.normalize_output = normalize_output
+        self.weights = np.ones(input_dims,dtype=np.float32)
+    
+    def _define_layer_variables(self):
+        # Define tensor-flow versions of variables (placeholder and variables)
+        super()._define_layer_variables()
+        with tf.name_scope('weights_init'):
+            self.weights_ph = tf.placeholder_with_default(
+                self.weights,
+                shape=self.weights.shape,
+                name='weights_ph')
+            self.weights_var = tf.Variable(
+                self.weights_ph,
+                dtype=tf.float32,
+                name='weights_var', 
+                )
+
+
+    def build_graph(self, inputs, params_dict=None, batch_size=None, use_dropout=False):
+        with tf.name_scope(self.scope):
+            self._define_layer_variables()
+            normalized = tf.identity(inputs)
+            if self.normalize_output:
+                normalized = np.sqrt(self.normalize_output)*tf.nn.l2_normalize(normalized,axis=1)
+                print(f'NORMALIZING OUTPUT {self.normalize_output}')
+            
+            self.outputs = normalized*tf.tile(
+                tf.reshape(self.weights_var,(-1,np.product(self.output_dims[1:]))),
+                (self.output_dims[0],1))
+
+    def copy_layer_params(self, origin_layer):
+        super().copy_layer_params(origin_layer)
+        self.normalize_output = deepcopy(origin_layer.normalize_output)
+
+
