@@ -3685,7 +3685,8 @@ class MaskLayer(Layer):
             self._define_layer_variables()
             normalized = tf.identity(inputs)
             if self.normalize_output:
-                normalized = np.sqrt(self.normalize_output)*tf.nn.l2_normalize(normalized,axis=1)
+                normalized = (normalized-tf.reduce_mean(normalized,axis=0)) / tf.math.reduce_std(normalized,axis=0) 
+                #np.sqrt(self.normalize_output)*tf.nn.l2_normalize(normalized,axis=1)
                 print(f'NORMALIZING OUTPUT {self.normalize_output}')
             
             self.outputs = normalized*tf.tile(
