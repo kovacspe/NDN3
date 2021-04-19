@@ -517,6 +517,8 @@ class NDN(object):
                     if self.log_correlation == 'filter-low-std-gold' or self.log_correlation == 'filter-NaNs':
                         tf.summary.scalar('correlation-non-filtered-out-neurons', tf.shape(self.correlation)[0])
 
+        for i,i_cost in cost:
+             tf.summary.scalar(f'cost_{i}', i_cost)
         self.cost = tf.add_n(cost)
         self.unit_cost = unit_cost # this is not yet normalized
 
