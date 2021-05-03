@@ -3684,10 +3684,8 @@ class MaskLayer(Layer):
         with tf.name_scope(self.scope):
             self._define_layer_variables()
             normalized = tf.identity(inputs)
-            axis = tuple(range(1,len(self.input_dims)))
-            print(axis)
             if self.normalize_output:
-                normalized = (normalized-tf.reduce_mean(normalized,axis=axis,keep_dims=True)) / tf.math.reduce_std(normalized,axis=axis,keepdims=True) 
+                normalized = (normalized-tf.reduce_mean(normalized,axis=1,keep_dims=True)) / tf.math.reduce_std(normalized,axis=1,keepdims=True) 
                 print(f'NORMALIZING OUTPUT {self.normalize_output}')
             
             self.outputs = normalized*tf.tile(
