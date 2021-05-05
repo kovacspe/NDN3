@@ -3646,7 +3646,7 @@ class MaskLayer(Layer):
         reg_initializer=None, 
         num_inh=0, 
         pos_constraint=None,
-        normalize_output=None,
+        normalize_output=False,
         log_activations=False):
 
         super().__init__(scope=scope, 
@@ -3685,8 +3685,7 @@ class MaskLayer(Layer):
             self._define_layer_variables()
             normalized = tf.identity(inputs)
             if self.normalize_output:
-                normalized = (normalized-tf.reduce_mean(normalized,axis=1,keep_dims=True)) / tf.math.reduce_std(normalized,axis=1,keepdims=True) 
-                print(f'NORMALIZING OUTPUT {self.normalize_output}')
+                normalized = (normalized-tf.reduce_mean(normalized,axis=1,keepdims=True)) / tf.math.reduce_std(normalized,axis=1,keepdims=True) 
             
             self.outputs = normalized*tf.tile(
                 tf.reshape(self.weights_var,(-1,np.product(self.output_dims[1:]))),
